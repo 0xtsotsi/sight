@@ -338,8 +338,9 @@ export default function PreviewPane({
               ]
                 .filter(Boolean)
                 .flatMap((o) => {
-                  // A loop child renders once per item — one box per instance,
-                  // with the name tag on the first.
+                  // A loop child renders once per item — one box per
+                  // instance, each labelled, so an instance further down the
+                  // page still says what it is.
                   const list = rects[o.path];
                   const info = overlayInfo ? overlayInfo(o.path) : null;
                   if (!list || !info) return [];
@@ -349,12 +350,10 @@ export default function PreviewPane({
                       className={`node-outline ${o.type} ${info.kind}${info.bound ? ' bound' : ''}`}
                       style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
                     >
-                      {i === 0 && (
-                        <span className={`node-outline-tag ${r.y < 20 ? 'inside' : ''}`}>
-                          {outlineIcon(info)}
-                          {info.label}
-                        </span>
-                      )}
+                      <span className={`node-outline-tag ${r.y < 20 ? 'inside' : ''}`}>
+                        {outlineIcon(info)}
+                        {info.label}
+                      </span>
                     </div>
                   ));
                 })}
