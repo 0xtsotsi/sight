@@ -1,11 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { PagePanelIcon, NavigatorIcon, ComponentFillIcon, AssetManagerIcon } from './Icons.jsx';
+import {
+  PagePanelIcon,
+  NavigatorIcon,
+  ComponentFillIcon,
+  AssetManagerIcon,
+  CmsIcon,
+} from './Icons.jsx';
 
 const TABS = [
   { id: 'pages', title: 'Pages', shortcut: 'P', Icon: PagePanelIcon },
   { id: 'navigator', title: 'Navigator', shortcut: 'Z', Icon: NavigatorIcon },
   { id: 'components', title: 'Components', shortcut: '⇧A', Icon: ComponentFillIcon },
   { id: 'assets', title: 'Assets', shortcut: 'J', Icon: AssetManagerIcon },
+  { id: 'cms', title: 'CMS', shortcut: '⌥C', Icon: CmsIcon },
 ];
 
 const TOOLTIP_DELAY = 500;
@@ -32,15 +39,23 @@ export default function LeftRail({ active, onSelect }) {
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
-  // P / Z / ⇧A toggle the panels (ignored while typing in a field).
+  // P / Z / ⇧A / J / ⌥C toggle the panels (ignored while typing in a field).
   useEffect(() => {
     const onKey = (e) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey) return;
       const t = e.target;
       if (
         t instanceof HTMLElement &&
         (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
       ) {
+        return;
+      }
+      // ⌥C — matched on the physical key, since Option rewrites e.key to "ç".
+      if (e.altKey) {
+        if (e.code === 'KeyC') {
+          e.preventDefault();
+          onSelect('cms');
+        }
         return;
       }
       const k = e.key.toLowerCase();

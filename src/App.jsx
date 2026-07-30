@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import WelcomeScreen from './panels/WelcomeScreen.jsx';
 import PagesPanel from './panels/PagesPanel.jsx';
 import PalettePanel from './panels/PalettePanel.jsx';
 import StructurePanel from './panels/StructurePanel.jsx';
 import PropsPanel from './panels/PropsPanel.jsx';
+import StylePanel from './panels/StylePanel.jsx';
 import PreviewPane from './panels/PreviewPane.jsx';
 import GitChip from './panels/GitChip.jsx';
 import LeftRail from './ui/LeftRail.jsx';
@@ -11,6 +12,8 @@ import CodeWindow from './ui/CodeWindow.jsx';
 import PageSwitcher from './ui/PageSwitcher.jsx';
 import InsertSearch from './ui/InsertSearch.jsx';
 import AssetsPanel from './panels/AssetsPanel.jsx';
+import CmsPanel from './panels/CmsPanel.jsx';
+import CmsView from './panels/CmsView.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
 import { onAssetRequest, clearAssetRequest } from './assetPick.js';
 import { isDataBound } from './bindings.js';
@@ -347,7 +350,10 @@ export default function App() {
   const [busy, setBusy] = useState(null); // string message
   const [toast, setToast] = useState(null); // {msg, kind}
   const [refreshKey, setRefreshKey] = useState(0);
-  const [leftTab, setLeftTab] = useState('navigator'); // pages | navigator | components | null
+  const [leftTab, setLeftTab] = useState('navigator'); // pages | navigator | components | assets | cms | null
+  const [cmsRel, setCmsRel] = useState(null); // JSON file open in the CMS editor
+  const [cmsTick, setCmsTick] = useState(0); // bumped on save, refreshes counts
+  const [cmsSettings, setCmsSettings] = useState(false); // editing that collection's fields
   const [inPreview, setInPreview] = useState(false); // interactive full-site preview
   const [previewSrc, setPreviewSrc] = useState(null);
   const [codeWin, setCodeWin] = useState(null); // {targetId|kind:'file', title, language}
@@ -361,6 +367,11 @@ export default function App() {
   // scrolls the row into view — a counter, not the id, so clicking the same
   // element twice still reveals it.
   const [revealTick, setRevealTick] = useState(0);
+  const [rightTab, setRightTab] = useState('style'); // style | settings
+  // Sliding highlight behind the active Style/Settings tab, measured from the
+  // buttons so it tracks their real geometry (and any panel resize).
+  const rightTabRefs = useRef({});
+  const [rightTabInd, setRightTabInd] = useState(null);
   // The asset request a field is waiting on, and the tab to go back to once
   // it's answered — "Choose Image…" borrows the left panel rather than
   // opening a window over the canvas.
@@ -571,6 +582,40 @@ export default function App() {
     },
     [openFile]
   );
+
+  // Re-reads whatever is open straight from disk. A git checkout rewrites the
+  // working tree wholesale, and the file watcher can't be relied on for it:
+  // events for files the app itself wrote moments earlier are suppressed (so
+  // its own save isn't echoed back), which is exactly the case when you edit,
+  // switch branch, and expect to see the other branch's content.
+  const reloadFromDisk = useCallback(async () => {
+    const proj = projectRef.current;
+    const open = pageStateRef.current.currentPage;
+    if (!proj) return;
+    const result = await rescan(proj.path);
+    if (!open) return;
+    // The open file may not exist on the branch just switched to.
+    const stillThere =
+      result.pages.some((p) => p.path === open.path) ||
+      result.components.some((c) => c.path === open.path) ||
+      result.layouts.some((l) => l.path === open.path);
+    if (stillThere) {
+      const fresh = await window.avb.readPage(open.path);
+      setPageState({ ...fresh, dirty: false });
+      setSelectedId(null);
+      historyRef.current = { past: [], future: [], lastPush: 0, lastKey: null };
+    } else {
+      const next = result.pages[0] || null;
+      setEditStack(next ? [{ ...next, kind: 'page' }] : []);
+      if (next) await openFile({ ...next, kind: 'page' });
+      else {
+        setCurrentPage(null);
+        setPageState(null);
+        setSelectedId(null);
+      }
+    }
+    setRefreshKey((k) => k + 1); // the preview is showing the old branch too
+  }, [rescan, openFile]);
 
   // Drill into a component: its own file becomes the edited document, and the
   // stack remembers what to come back to (pages and components alike, so
@@ -1164,11 +1209,17 @@ export default function App() {
     [insertTargetFor, addComponent, mutateModel]
   );
 
+  // True while the CMS covers the canvas: the page-editing shortcuts below
+  // would act on a selection the user can't see.
+  const cmsOpenRef = useRef(false);
+  cmsOpenRef.current = leftTab === 'cms' && !!cmsRel;
+
   // Keyboard: ⌘Z undoes, ⇧⌘Z / ⌘Y redoes (app-wide, even inside fields —
   // field edits live in the same history); Delete/Backspace removes, ⌘C
   // copies, ⌘D duplicates, ⌘V pastes — unless the user is typing in a field.
   useEffect(() => {
     const onKeyDown = (e) => {
+      if (cmsOpenRef.current) return;
       const mod = e.metaKey || e.ctrlKey;
 
       // Undo/redo take priority over native field undo so history stays
@@ -1216,6 +1267,19 @@ export default function App() {
         return;
       }
 
+      // S / D swap the right panel — plain keys, so they only fire outside
+      // fields (the check above) and never collide with ⌘D (duplicate).
+      if (!mod && !e.altKey && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        setRightTab('style');
+        return;
+      }
+      if (!mod && !e.altKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault();
+        setRightTab('settings');
+        return;
+      }
+
       if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
         if (!hasNodeSel) return;
         e.preventDefault();
@@ -1253,10 +1317,10 @@ export default function App() {
     };
     const offs = [
       window.avb.onMenu('undo', () => {
-        if (pageStateRef.current.pageState) undo();
+        if (pageStateRef.current.pageState && !cmsOpenRef.current) undo();
       }),
       window.avb.onMenu('redo', () => {
-        if (pageStateRef.current.pageState) redo();
+        if (pageStateRef.current.pageState && !cmsOpenRef.current) redo();
       }),
       window.avb.onMenu('copy', () => {
         if (inEditable() || String(window.getSelection() || '')) {
@@ -1264,7 +1328,7 @@ export default function App() {
           return;
         }
         const selId = selectedIdRef.current;
-        if (selId && pageStateRef.current.pageState?.editable) {
+        if (selId && pageStateRef.current.pageState?.editable && !cmsOpenRef.current) {
           copyNode(selId);
         }
       }),
@@ -1273,7 +1337,7 @@ export default function App() {
           window.avb.nativePaste();
           return;
         }
-        if (nodeClipboardRef.current && pageStateRef.current.pageState?.editable) {
+        if (nodeClipboardRef.current && pageStateRef.current.pageState?.editable && !cmsOpenRef.current) {
           pasteNode();
         }
       }),
@@ -1363,6 +1427,19 @@ export default function App() {
       if (!iframe) return;
       const r = iframe.getBoundingClientRect();
       if (r.width < 100 || r.height < 100) return;
+      // capturePage photographs the WINDOW at these coordinates, not the frame
+      // itself — and several things sit over the canvas without unmounting it
+      // (the CMS view, preview mode, the code window, the insert palette, a
+      // modal). Capturing then files a picture of that panel as the project's
+      // thumbnail. Rather than enumerate them, ask the document what is
+      // actually on top at a few points across the frame: unless every one of
+      // them lands inside the canvas, something is covering it — skip this
+      // round and keep the thumbnail we already have.
+      const covered = [0.25, 0.5, 0.75].some((f) => {
+        const el = document.elementFromPoint(r.x + r.width * f, r.y + r.height * 0.25);
+        return !el || !el.closest('.frame-clip');
+      });
+      if (covered) return;
       // Only the top of tall frames — thumbnails show above-the-fold content.
       window.avb.captureThumb({
         projectPath: project.path,
@@ -1370,7 +1447,7 @@ export default function App() {
       });
     }, 4000);
     return () => clearTimeout(t);
-  }, [project, devStatus, currentPage, refreshKey, pageState]);
+  }, [project, devStatus, currentPage, refreshKey, pageState, leftTab, inPreview, codeWin]);
 
   const setProp = useCallback(
     (nodeId, propName, value, immediate = false) => {
@@ -1446,8 +1523,11 @@ export default function App() {
   // changing, so references below the node follow along. A rename touches
   // many nodes at once, so it saves immediately and gets its own history
   // entry instead of coalescing with the keystrokes around it.
+  // `immediate` skips the typing coalesce for an edit that arrives already committed
+  // (the style panel writing a <style> block): waiting 300 ms there just delays the
+  // canvas, since the next keystroke it was batching with never comes.
   const setNodeText = useCallback(
-    (nodeId, value, renames) => {
+    (nodeId, value, renames, immediate = false) => {
       const renaming = (renames || []).some((r) => r.from && r.to && r.from !== r.to);
       mutateModel(
         (model) => {
@@ -1472,7 +1552,7 @@ export default function App() {
           }
           return model;
         },
-        renaming,
+        renaming || immediate,
         renaming ? undefined : `text:${nodeId}`
       );
     },
@@ -1945,6 +2025,35 @@ export default function App() {
     const trail = pathOfNode(model.nodes, id);
     return trail ? trail.join('.') : null;
   };
+  // Picking a component swaps the right panel to Settings — its props are the
+  // only thing there is to edit on it; picking a plain element (or a dynamic
+  // tag, which renders one) swaps back to Style. Anything else — frontmatter,
+  // text, a <style> block — leaves whatever tab the user had open alone.
+  const tabSelRef = useRef(null);
+  useEffect(() => {
+    if (selectedId === tabSelRef.current) return;
+    tabSelRef.current = selectedId;
+    if (!selectedNode) return;
+    const isComponent = selectedNode.kind === 'component' && !selectedNode.dynamicTag;
+    if (isComponent) setRightTab('settings');
+    else if (selectedNode.kind === 'element' || selectedNode.dynamicTag) setRightTab('style');
+  }, [selectedId, selectedNode]);
+
+  // Position the Style/Settings highlight: on tab change, when the panel first
+  // appears, and whenever the tab strip's width changes.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = rightTabRefs.current[rightTab];
+      setRightTabInd(el ? { left: el.offsetLeft, width: el.offsetWidth } : null);
+    };
+    measure();
+    const strip = rightTabRefs.current[rightTab]?.parentElement;
+    if (!strip || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(strip);
+    return () => ro.disconnect();
+  }, [rightTab, pageState?.editable]);
+
   const overlayInfo = (p) => {
     if (!model || !p) return null;
     const n = nodeAtPath(model.nodes, p.split('.').map(Number));
@@ -2052,7 +2161,12 @@ export default function App() {
             <PreviewIcon size={15} />
           </button>
         </div>
-        <GitChip project={project} showToast={showToast} flushSave={flushSave} />
+        <GitChip
+          project={project}
+          showToast={showToast}
+          flushSave={flushSave}
+          onWorktreeChanged={reloadFromDisk}
+        />
       </div>
 
       <div className="main">
@@ -2106,6 +2220,22 @@ export default function App() {
                 onDragBegin={() => setLeftTab('navigator')}
               />
             )}
+            {leftTab === 'cms' && (
+              <CmsPanel
+                project={project}
+                selectedRel={cmsRel}
+                refreshKey={cmsTick}
+                onSelect={(r) => {
+                  setCmsRel(r);
+                  setCmsSettings(false);
+                }}
+                onOpenSettings={(r) => {
+                  setCmsRel(r);
+                  setCmsSettings(true);
+                }}
+                showToast={showToast}
+              />
+            )}
             {leftTab === 'assets' && (
               <AssetsPanel
                 project={project}
@@ -2147,7 +2277,19 @@ export default function App() {
                 if (!inside) closeComponent();
                 return;
               }
-              if (!p) return;
+              // Chrome the layout renders itself — header, footer, anything
+              // outside the page's <slot> — carries no page-model marker, so a
+              // click there arrives with no path. The layout owns that markup,
+              // so select it instead of doing nothing.
+              if (!p) {
+                const layout = model && findNodeById(model.nodes, 'layout');
+                if (layout) {
+                  setSelectedId(layout.id);
+                  setLeftTab('navigator');
+                  setRevealTick((t) => t + 1);
+                }
+                return;
+              }
               const n = model && nodeAtPath(model.nodes, p.split('.').map(Number));
               if (n) {
                 setSelectedId(n.id);
@@ -2162,6 +2304,25 @@ export default function App() {
               if (n?.kind === 'component') openComponent(n.name, p);
             }}
           />
+
+          {/* The CMS edits content, not layout — it covers the canvas rather
+              than replacing it, so the preview keeps its loaded page. */}
+          {cmsRel && (
+            <CmsView
+              project={project}
+              rel={cmsRel}
+              hidden={leftTab !== 'cms'}
+              settings={cmsSettings}
+              showToast={showToast}
+              onSaved={() => setCmsTick((t) => t + 1)}
+              onCloseSettings={() => setCmsSettings(false)}
+              onDeleted={() => {
+                setCmsRel(null);
+                setCmsSettings(false);
+              }}
+              onClose={() => setCmsRel(null)}
+            />
+          )}
         </div>
 
         {inPreview && previewSrc && (
@@ -2172,6 +2333,35 @@ export default function App() {
 
         {pageState?.editable && (
           <div className="panel right">
+            <div className="right-tabs">
+              {rightTabInd && <span className="right-tabs-indicator" style={rightTabInd} />}
+              {[
+                { id: 'style', label: 'Style' },
+                { id: 'settings', label: 'Settings' },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  ref={(el) => (rightTabRefs.current[t.id] = el)}
+                  className={rightTab === t.id ? 'on' : ''}
+                  onClick={() => setRightTab(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {rightTab === 'style' && (
+              <StylePanel
+                project={project}
+                model={model}
+                node={selectedNode}
+                device={device}
+                onWriteStyleNode={(nodeId, css, immediate) =>
+                  setNodeText(nodeId, css, undefined, immediate)
+                }
+                onSelectNode={setSelectedId}
+              />
+            )}
+            <div style={{ display: rightTab === 'settings' ? 'contents' : 'none' }}>
             <PropsPanel
               node={selectedNode}
               isLayout={selectedId === 'layout'}
@@ -2206,6 +2396,7 @@ export default function App() {
               onOpenCode={openCodeWindow}
               projectPath={project.path}
             />
+            </div>
           </div>
         )}
       </div>

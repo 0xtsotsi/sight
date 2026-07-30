@@ -902,7 +902,7 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   min-height: 0;
 }
 .panel.left { width: 260px; flex-shrink: 0; }
-.panel.right { width: 280px; flex-shrink: 0; border-right: none; border-left: 1px solid var(--border); }
+.panel.right { width: 322px; flex-shrink: 0; border-right: none; border-left: 1px solid var(--border); }
 
 .panel-section { display: flex; flex-direction: column; min-height: 0; }
 .panel-section + .panel-section { border-top: 1px solid var(--border); }
@@ -931,7 +931,7 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   padding: 2px 8px 12px;
 }
 
-.center { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.center { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg); position: relative; }
 
 /* ------------------------------------------------------------------ */
 /* Lists                                                               */
@@ -999,6 +999,130 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
 }
 
 /* Palette */
+/* Style-panel popups (clip path, transitions, background, grid) portal to
+   <body> and share one backdrop. moden sized them to the window because there
+   the panel WAS the window; here the panel is a right-hand column, so bind the
+   backdrop to its published box and let each sheet fill that.
+
+   The zoom matters: sheets that re-apply moden’s 0.75 panel zoom render at 75%
+   of their layout width, so those are widened by 1/0.75 to land back at exactly
+   the panel width. Sheets without zoom take the width as-is. */
+body > .embed-editor_bg-modal-backdrop {
+  left: var(--style-panel-left, 0);
+  top: var(--style-panel-top, 0);
+  right: auto;
+  bottom: auto;
+  width: var(--style-panel-width, 100vw);
+  height: var(--style-panel-height, 100vh);
+  justify-content: center;
+}
+body > .embed-editor_bg-modal-backdrop > .embed-editor_clip-modal,
+body > .embed-editor_bg-modal-backdrop > .embed-editor_bg-modal {
+  width: calc(100% / 0.75);
+  max-width: calc(100% / 0.75);
+}
+body > .embed-editor_bg-modal-backdrop > .embed-editor_ease-modal,
+body > .embed-editor_bg-modal-backdrop > .embed-editor_grid-modal {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* The panel is moden's markup, styled by moden's CSS — which assumes moden's
+   reset, where a button is an unstyled box. This app styles bare <button> and
+   <input> globally (centred inline-flex, filled, rounded, full-width inputs),
+   and those opinions land on every control inside the panel: section titles
+   come out centred, spacing values grow pill backgrounds. Re-apply the reset
+   the panel was written against, scoped to it, so its own CSS governs. */
+:where(.style-panel-host) button {
+  /* moden’s reset … */
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  /* … plus the declarations this app adds on top, returned to default.
+     `display: revert` is the important one: as inline-flex with
+     justify-content:center every button centred its own content, which is
+     what pushed the section titles to the middle. Back at the UA default a
+     button shrink-wraps, and moden’s CSS sets flex where it wants it. */
+  display: revert;
+  justify-content: normal;
+  align-items: normal;
+  gap: normal;
+  border-radius: 0;
+  transition: none;
+}
+:where(.style-panel-host) input,
+:where(.style-panel-host) textarea,
+:where(.style-panel-host) select {
+  font: inherit;
+  color: inherit;
+  width: auto;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  transition: none;
+}
+:where(.style-panel-host) img,
+:where(.style-panel-host) svg { display: block; max-width: 100%; }
+
+/* The style panel expects the shell around it to supply padding and to be the
+   single scroll container — its own root sets neither (see .app_body in moden).
+   Reproduce that here: pad the sides, scroll vertically, clip horizontally so a
+   long selector chip can't push the whole panel sideways. */
+/* The panel kit runs its own z-index scale (--z-modal: 1000, --z-tooltip: 10000)
+   which is unrelated to this app's (max ~600), so its sticky header at
+   --z-modal + 1 would paint over app chrome like the floating .code-window
+   (250). `isolation` makes the host a stacking context, keeping those values
+   internal — panel vs app order is then decided here, in app terms. Its
+   popovers are unaffected: every one of them portals to <body>. */
+.style-panel-host { flex: 1; min-height: 0; display: flex; flex-direction: column; isolation: isolate; }
+.style-panel-host > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-5, 16px);
+  overflow-x: clip;
+  overflow-y: auto;
+}
+
+/* Props / Style switch at the top of the right panel. */
+.right-tabs {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 8px 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.right-tabs button {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 5px 0;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+/* The sliding indicator is the only background here — hovering just lifts
+   the label, so nothing competes with the indicator as it travels. */
+.right-tabs button:hover:not(:disabled) { background: transparent; color: var(--text); }
+.right-tabs button.on { background: transparent; color: var(--text); }
+.right-tabs-indicator {
+  position: absolute;
+  top: 8px;
+  bottom: 4px;
+  border-radius: 6px;
+  background: var(--bg-active);
+  transition:
+    left 0.25s cubic-bezier(0.3, 0.7, 0.3, 1),
+    width 0.25s cubic-bezier(0.3, 0.7, 0.3, 1);
+  pointer-events: none;
+}
+
 /* {expression} chips in the content editor — the same purple the navigator
    uses for loops, so a value coming from a loop reads as one. */
 .expr-chip {
@@ -1859,6 +1983,22 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* Files that would ride along on a branch switch. */
+.dirty-files {
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  max-height: 132px;
+  overflow-y: auto;
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.dirty-files .more { color: var(--text-faint); font-family: inherit; }
+
 .publish-progress,
 .publish-done {
   display: flex;
@@ -2366,3 +2506,379 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
 .node-outline.hover.component .node-outline-tag { color: var(--green); }
 .node-outline.hover.map .node-outline-tag,
 .node-outline.hover.bound .node-outline-tag { color: #a78bfa; }
+
+/* Git panel: a failed action (a refused branch switch, above all) stays put
+   until dismissed — you must not keep editing believing you switched. */
+.git-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 69, 58, 0.14);
+  border: 1px solid rgba(255, 69, 58, 0.4);
+  color: #ffb4ae;
+  font-size: 11.5px;
+  line-height: 1.5;
+  user-select: text;
+}
+.git-error button { margin-left: auto; flex-shrink: 0; color: inherit; }
+
+/* ------------------------------------------------------------------ */
+/* CMS — JSON under src/ edited as collections                         */
+/* ------------------------------------------------------------------ */
+
+.cms-group + .cms-group { margin-top: 10px; }
+.cms-group-label {
+  padding: 6px 8px 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+.cms-collection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+.cms-collection:hover { background: var(--bg-hover); color: var(--text); }
+.cms-collection.on { background: var(--bg-active); color: var(--text); }
+.cms-collection.broken { color: var(--red); }
+.cms-collection input { height: 24px; padding: 2px 6px; }
+.cms-collection-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.cms-collection-count { font-size: 10.5px; color: var(--text-faint); flex-shrink: 0; }
+.cms-collection-chevron { color: var(--text-faint); display: flex; }
+.cms-collection .row-action { opacity: 0; padding: 2px; color: var(--text-faint); }
+.cms-collection:hover .row-action { opacity: 1; }
+.cms-collection .row-action:hover { color: var(--red); background: transparent; }
+
+/* The editor itself, covering the canvas while the CMS panel is open. */
+.cms-view {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  background: var(--bg);
+}
+
+.cms-items {
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+.cms-items-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 8px 8px 12px;
+  flex-shrink: 0;
+}
+.cms-items-title { font-size: 13px; font-weight: 600; }
+.cms-search { padding: 0 12px 8px; flex-shrink: 0; }
+.cms-search input { height: 28px; padding: 4px 8px; }
+.cms-item-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 12px; }
+
+.cms-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+}
+.cms-item:hover { background: var(--bg-hover); color: var(--text); }
+.cms-item.on { background: var(--bg-active); color: var(--text); }
+.cms-item.drop-before { border-top-color: var(--accent); }
+.cms-item.drop-after { border-bottom-color: var(--accent); }
+.cms-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.cms-item-grip { color: var(--text-faint); opacity: 0; display: flex; cursor: grab; }
+.cms-item:hover .cms-item-grip { opacity: 1; }
+.cms-item svg:last-child { color: var(--text-faint); }
+
+.cms-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cms-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.cms-detail-title { font-size: 13px; font-weight: 600; }
+.cms-detail-path {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+.cms-detail-head .ghost.danger:hover { color: var(--red); }
+.cms-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--green);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.cms-saved.on { opacity: 1; }
+
+.cms-detail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px 60px; }
+
+.cms-card {
+  max-width: 720px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  padding: 16px 18px 14px;
+}
+.cms-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+
+.cms-field { margin-bottom: 14px; }
+.cms-field-head { display: flex; align-items: center; gap: 4px; margin-bottom: 5px; }
+.cms-field-head label { font-size: 11.5px; color: var(--text-dim); font-weight: 500; }
+.cms-field-remove { opacity: 0; padding: 1px; color: var(--text-faint); }
+.cms-field:hover .cms-field-remove { opacity: 1; }
+.cms-field-remove:hover { color: var(--red); background: transparent; }
+.cms-field input, .cms-field textarea { padding: 7px 9px; }
+
+.cms-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  padding: 2px 0;
+}
+.cms-toggle:hover:not(:disabled) { background: transparent; }
+.cms-toggle::before {
+  content: '';
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  transition: background 0.12s;
+}
+.cms-toggle.on::before { background: var(--accent); border-color: var(--accent); }
+.cms-toggle-knob {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: left 0.12s, background 0.12s;
+  pointer-events: none;
+}
+.cms-toggle.on .cms-toggle-knob { left: 17px; background: #fff; }
+.cms-toggle-label { color: var(--text-dim); font-size: 11.5px; }
+
+.cms-list-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.cms-list-row .ghost { padding: 3px; color: var(--text-faint); }
+.cms-list-row .ghost:hover { color: var(--red); background: transparent; }
+
+.cms-add {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-dim);
+  padding: 5px 10px;
+  font-size: 11.5px;
+  border-radius: 6px;
+}
+.cms-add:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.cms-add.compact { padding: 3px 8px; font-size: 11px; }
+
+.cms-add-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.cms-add-field input { flex: 1; min-width: 0; }
+.cms-add-field .cms-type-dd { width: 130px; flex-shrink: 0; }
+.cms-add-field .ghost { padding: 4px; color: var(--text-faint); }
+
+.cms-group-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-panel-2);
+}
+.cms-group-box .cms-field:last-of-type { margin-bottom: 8px; }
+
+.cms-repeater { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.cms-repeat-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+  cursor: pointer;
+  color: var(--text-dim);
+}
+.cms-repeat-row:hover { color: var(--text); background: var(--bg-hover); }
+.cms-repeat-row.drop-before { border-top-color: var(--accent); }
+.cms-repeat-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.cms-repeat-grip { color: var(--text-faint); opacity: 0; display: flex; cursor: grab; }
+.cms-repeat-row:hover .cms-repeat-grip { opacity: 1; }
+.cms-repeat-row .ghost { padding: 3px; color: var(--text-faint); }
+.cms-repeat-row .ghost:hover { color: var(--red); background: transparent; }
+
+/* One repeater entry, opened in a dialog. */
+.cms-modal { width: 520px; }
+.cms-modal-header { display: flex; align-items: center; gap: 8px; }
+.cms-modal-header span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cms-modal-header .ghost { padding: 3px; color: var(--text-faint); }
+.cms-modal-body { max-height: 60vh; overflow-y: auto; gap: 0; padding-top: 12px; }
+.cms-modal-body .cms-field:last-of-type { margin-bottom: 8px; }
+.cms-modal-footer { justify-content: space-between; }
+.cms-modal-footer .ghost.danger { color: var(--text-dim); }
+.cms-modal-footer .ghost.danger:hover { color: var(--red); background: rgba(255, 69, 58, 0.12); }
+
+.cms-empty-inline { color: var(--text-faint); font-size: 11.5px; padding: 2px 0 8px; }
+.cms-error {
+  max-width: 720px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 69, 58, 0.14);
+  border: 1px solid rgba(255, 69, 58, 0.4);
+  color: #ffb4ae;
+  font-size: 11.5px;
+  user-select: text;
+}
+/* Kept mounted while another panel is up: picking an image switches to the
+   Assets panel, and unmounting would drop the pick and the unsaved edit. */
+.cms-view.hidden { display: none; }
+
+/* Collection settings — the schema, kept out of the item editor. */
+.cms-settings { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cms-settings .cms-detail-head .primary { padding: 5px 14px; }
+.cms-note { color: var(--text-faint); font-size: 11.5px; margin: -8px 0 14px; line-height: 1.5; }
+
+.cms-schema { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.cms-schema-group { width: 100%; }
+.cms-schema-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel-2);
+}
+.cms-schema-row.drop-before { border-top-color: var(--accent); }
+.cms-schema-grip { color: var(--text-faint); opacity: 0; display: flex; cursor: grab; }
+.cms-schema-row:hover .cms-schema-grip { opacity: 1; }
+.cms-schema-expand {
+  width: 18px;
+  padding: 2px;
+  color: var(--text-faint);
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.cms-schema-expand svg { transition: transform 0.12s; }
+.cms-schema-expand svg.rotated { transform: rotate(90deg); }
+.cms-schema-name { flex: 1; min-width: 0; background: transparent; }
+.cms-schema-name:hover { background: var(--bg-input); }
+.cms-schema-type { width: 150px; flex-shrink: 0; }
+.cms-schema-row .ghost.danger { padding: 4px; color: var(--text-faint); }
+.cms-schema-row .ghost.danger:hover { color: var(--red); background: transparent; }
+.cms-schema-nested {
+  margin: 4px 0 4px 26px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
+.cms-card.cms-danger { margin-top: 16px; }
+.cms-card.cms-danger .ghost.danger { color: var(--red); border: 1px solid rgba(255, 69, 58, 0.4); }
+.cms-card.cms-danger .ghost.danger:hover { background: rgba(255, 69, 58, 0.14); }
+
+/* Field-type picker for a new field. */
+.cms-type-modal { width: 560px; }
+.cms-type-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 14px 16px 16px;
+}
+.cms-type-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 12px 10px;
+  height: auto;
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--text-dim);
+}
+.cms-type-tile:hover:not(:disabled) { background: var(--bg-active); border-color: var(--border-strong); color: var(--text); }
+.cms-type-tile svg { margin-bottom: 4px; }
+.cms-type-name { font-size: 12px; font-weight: 500; color: var(--text); }
+.cms-type-hint { font-size: 10.5px; color: var(--text-faint); font-weight: 400; }
+
+/* A field's type, stated rather than editable. */
+.cms-schema-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 150px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.cms-color { display: flex; align-items: center; gap: 6px; }
+.cms-color input[type='color'] {
+  width: 34px;
+  height: 30px;
+  padding: 2px;
+  flex-shrink: 0;
+  background: var(--bg-input);
+  cursor: pointer;
+}

@@ -205,6 +205,7 @@ if (!process.isMainFrame) {
   const regions = new Map(); // path -> [ [node, ...], ... ]
   let trackedPaths = [];
   let lastHoverPath = undefined;
+  let lastHoverOcc = 0;
 
   // Element nodes also carry their path as an attribute, because the node
   // references above go stale: the page's own scripts are free to rebuild
@@ -327,8 +328,23 @@ if (!process.isMainFrame) {
     });
   };
 
-  // Deepest marked node whose rendered DOM contains the target.
-  const pathContaining = (target) => {
+  // Which rendered copy of a node the target sits in. A node inside a loop
+  // is recorded once per item, so the runs are the instances in order.
+  const occurrenceOf = (path, target) => {
+    const runs = regions.get(path);
+    if (!runs || runs.length < 2) return 0;
+    for (let i = 0; i < runs.length; i++) {
+      for (const n of runs[i]) {
+        if (!n.isConnected) continue;
+        if (n === target || (n.nodeType === 1 && n.contains(target))) return i;
+      }
+    }
+    return 0;
+  };
+
+  // Deepest marked node whose rendered DOM contains the target, plus which
+  // instance of it was hit — the app outlines only that one.
+  const nodeAt = (target) => {
     // Clones the page's own scripts made aren't in any recorded run, so the
     // tag is the only way to reach them — without this, clicking a split
     // paragraph would select its parent instead.
@@ -339,18 +355,26 @@ if (!process.isMainFrame) {
       const depth = p.split('.').length;
       if (depth <= bestDepth) continue;
       for (const run of runs) {
+        let hit = false;
         for (const n of run) {
           if (n.isConnected && n.nodeType === 1 && (n === target || n.contains(target))) {
-            best = p;
-            bestDepth = depth;
+            hit = true;
             break;
           }
         }
-        if (bestDepth === depth) break;
+        if (hit) {
+          best = p;
+          bestDepth = depth;
+          break;
+        }
       }
     }
-    return best;
+    // Resolved separately from the search above: when the winning path came
+    // from the tag, its own runs were never scanned.
+    return { path: best, occurrence: best ? occurrenceOf(best, target) : 0 };
   };
+
+  const pathContaining = (target) => nodeAt(target).path;
 
   const startOutlines = () => {
     collectRegions();
@@ -364,10 +388,11 @@ if (!process.isMainFrame) {
       characterData: true,
     });
     document.addEventListener('mousemove', (e) => {
-      const p = pathContaining(e.target);
-      if (p !== lastHoverPath) {
+      const { path: p, occurrence } = nodeAt(e.target);
+      if (p !== lastHoverPath || occurrence !== lastHoverOcc) {
         lastHoverPath = p;
-        window.parent.postMessage({ type: 'avb:hover-node', path: p }, '*');
+        lastHoverOcc = occurrence;
+        window.parent.postMessage({ type: 'avb:hover-node', path: p, occurrence }, '*');
       }
     });
     document.documentElement.addEventListener('mouseleave', () => {
@@ -402,8 +427,11 @@ if (!process.isMainFrame) {
         e.stopPropagation();
         // A click that hits no marked node still reports (path null) — the
         // app uses empty clicks to back out of component editing.
-        const p = pathContaining(e.target);
-        window.parent.postMessage({ type: 'avb:click-node', path: p || null }, '*');
+        const { path: p, occurrence } = nodeAt(e.target);
+        window.parent.postMessage(
+          { type: 'avb:click-node', path: p || null, occurrence },
+          '*'
+        );
       },
       true
     );
@@ -506,6 +534,21 @@ contextBridge.exposeInMainWorld('avb', {
     return () => ipcRenderer.removeListener('assets:changed', listener);
   },
 
+  // CMS (JSON data under src/)
+  listCms: invoke('cms:list'),
+  readCms: invoke('cms:read'),
+  writeCms: invoke('cms:write'),
+  createCms: invoke('cms:create'),
+  deleteCms: invoke('cms:delete'),
+  cmsUsage: invoke('cms:usage'),
+  cmsMeta: invoke('cms:meta'),
+  setCmsMeta: invoke('cms:setMeta'),
+  onCmsChanged: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('cms:changed', listener);
+    return () => ipcRenderer.removeListener('cms:changed', listener);
+  },
+
   // Recent projects
   listRecents: invoke('recents:list'),
   addRecent: invoke('recents:add'),
@@ -528,6 +571,11 @@ contextBridge.exposeInMainWorld('avb', {
   startDevServer: invoke('dev:start'),
   stopDevServer: invoke('dev:stop'),
   diagnoseDev: invoke('dev:diagnose'),
+
+  // Style panel targets
+  listStyleFiles: invoke('style:listFiles'),
+  readStyleFile: invoke('style:readFile'),
+  writeStyleFile: invoke('style:writeFile'),
 
   // Git
   gitInfo: invoke('git:info'),

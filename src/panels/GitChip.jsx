@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { cleanError } from '../App.jsx';
-import { BranchIcon, CheckIcon, ExternalIcon } from '../ui/Icons.jsx';
+import { BranchIcon, CheckIcon, ExternalIcon, CloseIcon } from '../ui/Icons.jsx';
 
 // owner/repo out of any GitHub remote form (https or ssh), for display.
 const repoSlug = (url) => {
@@ -14,16 +14,18 @@ const webUrl = (url) => {
 
 // Branch/status chip in the title bar. Opens a dropdown with branch
 // switching, branch creation, commit + push, and GitHub publishing.
-export default function GitChip({ project, showToast, flushSave }) {
+export default function GitChip({ project, showToast, flushSave, onWorktreeChanged }) {
   const [info, setInfo] = useState(null);
   const [open, setOpen] = useState(false);
   const [commitMsg, setCommitMsg] = useState('');
   const [newBranch, setNewBranch] = useState('');
+  const [error, setError] = useState(null);
   // Label of the action in flight, or null. Doubles as the busy flag so the
   // chip itself can say what it's doing while the dropdown is closed.
   const [busy, setBusy] = useState(null);
   const working = busy !== null;
   const [showPublish, setShowPublish] = useState(false);
+  const [switchTo, setSwitchTo] = useState(null); // branch awaiting a dirty-tree decision
   const wrapRef = useRef(null);
 
   const refresh = async () => {
@@ -48,15 +50,61 @@ export default function GitChip({ project, showToast, flushSave }) {
 
   const act = async (fn, successMsg, label = 'Working…') => {
     setBusy(label);
+    setError(null);
     try {
       await flushSave();
       await fn();
       await refresh();
+      // Checkout/pull rewrite the working tree — re-read what's open so the
+      // editor and preview show the branch that's actually checked out.
+      if (onWorktreeChanged) await onWorktreeChanged();
       if (successMsg) showToast(successMsg, 'success');
     } catch (err) {
-      showToast(cleanError(err), 'error');
+      const msg = cleanError(err);
+      // A failed branch switch leaves you on the branch you were already on,
+      // so this has to stay on screen — a toast that fades is how edits end
+      // up on the wrong branch without anyone noticing.
+      setError(msg);
+      setOpen(true);
+      showToast(msg, 'error');
+      setBusy(null);
+      return false;
     }
     setBusy(null);
+    return true;
+  };
+
+  // Git carries uncommitted changes across a checkout, and this editor saves
+  // to disk constantly — so without asking first, work done on one branch
+  // silently follows you to the next and gets committed there. Switching with
+  // a dirty tree stops here and makes the choice explicit.
+  const requestSwitch = (branch) => {
+    if (branch === info.branch) return;
+    if (info.dirty) {
+      setSwitchTo(branch);
+      setOpen(false);
+      return;
+    }
+    switchNow(branch);
+  };
+
+  const switchNow = (branch) =>
+    act(
+      () => window.avb.gitCheckout({ projectPath: project.path, branch }),
+      `Switched to ${branch}`,
+      'Switching…'
+    );
+
+  const commitThenSwitch = (branch, message) => {
+    const from = info.branch;
+    return act(
+      async () => {
+        await window.avb.gitCommit({ projectPath: project.path, message });
+        await window.avb.gitCheckout({ projectPath: project.path, branch });
+      },
+      `Committed to ${from}, now on ${branch}`,
+      'Committing…'
+    );
   };
 
   // Publishing is driven from the modal so it can show each step and keep the
@@ -152,19 +200,20 @@ export default function GitChip({ project, showToast, flushSave }) {
 
       {open && (
         <div className="dropdown">
+          {error && (
+            <div className="git-error">
+              {error}
+              <button className="ghost" title="Dismiss" onClick={() => setError(null)}>
+                <CloseIcon size={11} />
+              </button>
+            </div>
+          )}
           <h3>Branches</h3>
           {info.branches.map((b) => (
             <div
               key={b}
               className={`list-item ${b === info.branch ? 'active' : ''}`}
-              onClick={() =>
-                b !== info.branch &&
-                act(
-                  () => window.avb.gitCheckout({ projectPath: project.path, branch: b }),
-                  `Switched to ${b}`,
-                  'Switching…'
-                )
-              }
+              onClick={() => requestSwitch(b)}
             >
               <span className="icon" style={{ width: 14 }}>
                 {b === info.branch ? <CheckIcon size={12} /> : null}
@@ -266,6 +315,22 @@ export default function GitChip({ project, showToast, flushSave }) {
         </div>
       )}
 
+      {switchTo && (
+        <SwitchBranchModal
+          from={info.branch}
+          to={switchTo}
+          files={info.dirtyFiles || []}
+          busy={busy}
+          onCancel={() => setSwitchTo(null)}
+          onTakeAlong={async () => {
+            if (await switchNow(switchTo)) setSwitchTo(null);
+          }}
+          onCommitFirst={async (message) => {
+            if (await commitThenSwitch(switchTo, message)) setSwitchTo(null);
+          }}
+        />
+      )}
+
       {showPublish && (
         <PublishModal
           defaultName={project.name}
@@ -275,6 +340,79 @@ export default function GitChip({ project, showToast, flushSave }) {
           openExternal={(u) => window.avb.openExternal(u)}
         />
       )}
+    </div>
+  );
+}
+
+// Shown when a branch switch would drag uncommitted work along. Deliberately
+// has no default action: taking changes with you and leaving them behind are
+// both reasonable, and picking one silently is how the edits ended up on the
+// wrong branch in the first place.
+function SwitchBranchModal({ from, to, files, busy, onCancel, onTakeAlong, onCommitFirst }) {
+  const [message, setMessage] = useState('');
+  const working = !!busy;
+  const shown = files.slice(0, 5);
+  const rest = files.length - shown.length;
+
+  return (
+    <div
+      className="modal-overlay"
+      onMouseDown={(e) => e.target === e.currentTarget && !working && onCancel()}
+    >
+      <div className="modal">
+        <div className="modal-header">Uncommitted changes</div>
+        <div className="modal-body">
+          <div className="hint-text">
+            You have unsaved-to-git changes on <strong>{from}</strong>. Git carries them
+            across a switch, so they’d end up part of <strong>{to}</strong>.
+          </div>
+
+          {shown.length > 0 && (
+            <ul className="dirty-files">
+              {shown.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+              {rest > 0 && <li className="more">+{rest} more</li>}
+            </ul>
+          )}
+
+          <div>
+            <label>Commit message</label>
+            <input
+              autoFocus
+              placeholder={`Update ${from}`}
+              value={message}
+              disabled={working}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !working) onCommitFirst(message.trim() || `Update ${from}`);
+              }}
+            />
+          </div>
+
+          {working && (
+            <div className="publish-progress">
+              <span className="mini-spinner" />
+              <span>{busy}</span>
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button onClick={onCancel} disabled={working}>
+            Cancel
+          </button>
+          <button onClick={onTakeAlong} disabled={working} title={`Leave them uncommitted and switch to ${to}`}>
+            Take changes to {to}
+          </button>
+          <button
+            className="primary"
+            disabled={working}
+            onClick={() => onCommitFirst(message.trim() || `Update ${from}`)}
+          >
+            Commit to {from}, then switch
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

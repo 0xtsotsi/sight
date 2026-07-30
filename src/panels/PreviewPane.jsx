@@ -104,15 +104,42 @@ export default function PreviewPane({
   // The path of the last selection made by clicking the page itself, so the
   // scroll-into-view below can skip it.
   const clickedPathRef = React.useRef(null);
+  // Which instance of a repeated node is outlined. Canvas clicks pick the one
+  // under the pointer; selections from anywhere else fall back to the first.
+  const lastClickRef = React.useRef(null);
+  const [selOcc, setSelOcc] = React.useState(0);
+  const [hoverOcc, setHoverOcc] = React.useState(0);
+  // Canvas clicks set the instance directly (below) — including when they
+  // land on another instance of the node that's already selected, where
+  // selPath never changes. Any other route to a new selection means "the
+  // node", so it falls back to the first instance. The click marker is
+  // consumed here so coming back to the same node later starts at the first
+  // instance again.
+  React.useEffect(() => {
+    if (lastClickRef.current?.path === selPath) {
+      lastClickRef.current = null;
+      return;
+    }
+    lastClickRef.current = null;
+    setSelOcc(0);
+  }, [selPath]);
 
   React.useEffect(() => {
     const onMsg = (e) => {
       if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return;
       const d = e.data;
       if (d?.type === 'avb:rects') setRects(d.rects || {});
-      else if (d?.type === 'avb:hover-node') setCanvasHover(d.path || null);
-      else if (d?.type === 'avb:click-node' && onSelectPath) {
+      else if (d?.type === 'avb:hover-node') {
+        setCanvasHover(d.path || null);
+        setHoverOcc(d.occurrence || 0);
+      } else if (d?.type === 'avb:click-node' && onSelectPath) {
         clickedPathRef.current = d.path || null;
+        // Which instance was clicked: a node inside a loop renders once per
+        // item and only that one should light up. Set now, not from the
+        // effect above, so clicking a different instance of the already
+        // selected node still moves the outline.
+        lastClickRef.current = { path: d.path || null, occ: d.occurrence || 0 };
+        setSelOcc(d.occurrence || 0);
         onSelectPath(d.path || null);
       } else if (d?.type === 'avb:open-node' && d.path && onOpenPath) {
         onOpenPath(d.path);
@@ -123,6 +150,9 @@ export default function PreviewPane({
   }, [onSelectPath, onOpenPath]);
 
   const hoverPath = navHoverPath || canvasHover;
+  // A navigator hover means "the node", so every instance lights up; a canvas
+  // hover means the one under the pointer.
+  const hoverOccUsed = navHoverPath ? null : hoverOcc;
   const trackKey = [...new Set([selPath, hoverPath, focusPath].filter(Boolean))].join('|');
   const sendTrack = React.useCallback(() => {
     const w = iframeRef.current?.contentWindow;
@@ -333,17 +363,23 @@ export default function PreviewPane({
                   />
                 ))}
               {[
-                hoverPath && hoverPath !== selPath ? { path: hoverPath, type: 'hover' } : null,
-                selPath ? { path: selPath, type: 'sel' } : null,
+                hoverPath && hoverPath !== selPath
+                  ? { path: hoverPath, type: 'hover', occ: hoverOccUsed }
+                  : null,
+                selPath ? { path: selPath, type: 'sel', occ: selOcc } : null,
               ]
                 .filter(Boolean)
                 .flatMap((o) => {
                   // A loop child renders once per item — one box per
                   // instance, each labelled, so an instance further down the
                   // page still says what it is.
-                  const list = rects[o.path];
+                  const all = rects[o.path];
                   const info = overlayInfo ? overlayInfo(o.path) : null;
-                  if (!list || !info) return [];
+                  if (!all || !info) return [];
+                  // One box, not one per loop item, unless the hover came from
+                  // the navigator (which points at the node, not an instance).
+                  const list =
+                    o.occ == null ? all : all[o.occ] ? [all[o.occ]] : all.slice(0, 1);
                   return list.map((r, i) => (
                     <div
                       key={`${o.type}-${i}`}

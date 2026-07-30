@@ -1,0 +1,216 @@
+/*
+ * Design tokens — the ONE source of truth for color, typography, spacing,
+ * radius, border width, and sizing across the entire app.
+ *
+ * Every tool consumes these via `var(--token-name)`. No tool should ever
+ * hard-code hex colors, px values, or font-family strings. If you need a
+ * value that isn't here, add a token rather than inline a literal.
+ *
+ * Naming conventions:
+ *   --color-{role}              role-based, not literal (no --color-black)
+ *   --font-{property}-{scale}
+ *   --space-{step}              4px-base scale, step number is a position
+ *   --radius-{scale}
+ *   --border-width-{scale}
+ *   --size-{element}-{scale}
+ *   --transition-{scale}
+ *   --z-{layer}
+ */
+
+:root {
+  /* ──────────────────────────── Color ──────────────────────────── */
+
+  /* Surfaces — separation comes from tone, not strokes. Each step is a
+   * meaningful brightness shift; pick by role, not by literal lightness.
+   *
+   *   inset       — recessed (deeper than page): inputs, fields, code blocks
+   *   page        — the canvas color (app background)
+   *   surface     — lifted one step (cards, buttons, tags, label chips)
+   *   raised      — lifted two steps (hover, secondary surfaces)
+   *   overlay     — top of stack (popovers, dropdowns)
+   */
+  --color-bg-inset:           #000000;
+  --color-bg-page:            #1c1c1c;
+  --color-bg-surface:         #2b2b2b;
+  --color-bg-surface-raised:  #3b3b3b;
+  --color-bg-surface-high:    #4a4a4a;
+  /* Popover/menu surface. Aliased to `raised` so the ramp has one fewer near-duplicate
+     grey (it was #363636, a hair off raised's #3b3b3b). */
+  --color-bg-surface-overlay: var(--color-bg-surface-raised);
+  --color-bg-hover:           rgba(255, 255, 255, 0.05);
+  --color-bg-active:          rgba(255, 255, 255, 0.08);
+
+  /* ── Surface context ──
+   * Controls don't hardcode a surface color; they read these so they lift one
+   * visible step above whatever surface they sit on and stay legible. A
+   * container declares its surface with a `.u-surface-*` class (utilities.css),
+   * which re-points these variables. Root is the page surface (the app canvas).
+   * Neutral elevation ramp: inset → page → surface → raised → high.
+   *   --surface             the container's own background (informational)
+   *   --surface-control     bg for a raised control (button, select) on it
+   *   --surface-control-hover  its hover
+   *   --surface-inset       bg for a recessed field (input, slider track) on it
+   *   --surface-inset-hover its hover
+   *   --surface-overlay     bg for a popover/menu opened from it (floats above) */
+  --surface:               var(--color-bg-page);
+  --surface-control:       var(--color-bg-surface);
+  --surface-control-hover: var(--color-bg-surface-raised);
+  --surface-inset:         var(--color-bg-inset);
+  --surface-inset-hover:   #181818;
+  --surface-overlay:       var(--color-bg-surface-raised);
+
+  /* Borders — used sparingly. Default look has no border; reserve strokes for
+   * focus states, semantic accents (error/success), and explicit dividers. */
+  --color-border-subtle:  rgba(255, 255, 255, 0.04);
+  --color-border-default: rgba(255, 255, 255, 0.08);
+  --color-border-strong:  rgba(255, 255, 255, 0.16);
+  --color-border-focus:   var(--color-selection-bg); /* blue focus outline for inputs/controls */
+
+  /* Text (high → low emphasis) */
+  --color-text-primary:   #f0f0f0;
+  --color-text-secondary: #a0a0a0;
+  --color-text-tertiary:  #707070;
+  --color-text-disabled:  #4a4a4a;
+  --color-text-inverse:   #1c1c1c;
+
+  /* Semantic */
+  --color-accent:          #ffffff;
+  --color-accent-inverse:  #0a0a0a;
+  --color-success:         #4ade80;
+  --color-success-bg:      rgba(74, 222, 128, 0.10);
+  --color-success-border:  rgba(74, 222, 128, 0.30);
+  --color-danger:          #f87171;
+  --color-danger-bg:       rgba(248, 113, 113, 0.10);
+  --color-danger-border:   rgba(248, 113, 113, 0.30);
+  --color-warning:         #fbbf24;
+  --color-warning-bg:      rgba(251, 191, 36, 0.10);
+  --color-warning-border:  rgba(251, 191, 36, 0.30);
+  --color-info:            #93c5fd;
+  --color-info-bg:         rgba(147, 197, 253, 0.10);
+  --color-info-border:     rgba(147, 197, 253, 0.30);
+  --color-selection-bg:    #0c8ce9;
+  --color-class-tag-bg:    #016bcd;
+  --color-tag-bg:          #b53a9a;
+  --color-component-tag:        #79e09c;
+  --color-component-tag-bg:     rgba(37, 157, 77, 0.25);
+  --color-component-tag-bg-hover: rgba(37, 157, 77, 0.40);
+  /* Provenance label — a property set through another selector (Embed Editor). */
+  --color-prop-orange:          #ffbc86;
+  --color-prop-orange-bg:       rgba(223, 100, 12, 0.20);
+  --color-prop-orange-bg-hover: rgba(223, 100, 12, 0.30);
+
+  /* ──────────────────────────── Typography ──────────────────────────── */
+
+  --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --font-family-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  --font-size-2xs: 10px;
+  --font-size-xs:  11px;
+  --font-size-sm:  12px;
+  --font-size-md:  13px;
+  --font-size-lg:  15px;
+  --font-size-xl:  18px;
+  --font-size-2xl: 22px;
+  --font-size-3xl: 28px;
+  --font-size-4xl: 36px;
+
+  --font-weight-regular:  400;
+  --font-weight-medium:   500;
+  --font-weight-semibold: 600;
+  --font-weight-bold:     700;
+
+  --line-height-tight:   1.2;
+  --line-height-normal:  1.45;
+  --line-height-relaxed: 1.6;
+
+  --letter-spacing-tighter: -0.03em;
+  --letter-spacing-tight:   -0.015em;
+  --letter-spacing-normal:  0;
+  --letter-spacing-wide:    0.04em;
+  --letter-spacing-wider:   0.08em;
+
+  /* ──────────────────────────── Spacing ──────────────────────────── */
+  /* 4px base scale; step number maps to step position, not pixel count. */
+
+  --space-0:  0;
+  --space-1:  2px;
+  --space-2:  4px;
+  --space-3:  6px;
+  --space-4:  8px;
+  --space-5:  12px;
+  --space-6:  16px;
+  --space-7:  20px;
+  --space-8:  24px;
+  --space-9:  32px;
+  --space-10: 40px;
+  --space-11: 48px;
+  --space-12: 64px;
+  --space-13: 80px;
+
+  /* ──────────────────────────── Border radius ──────────────────────────── */
+
+  --radius-xs:   4px;
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  20px;
+  --radius-pill: 999px;
+
+  /* Canonical single-line input/control corner radius — pairs with --size-input
+   * so every text input, select, slider, button, tab and segmented control shares
+   * the same square shape. */
+  --radius-input: var(--radius-md);
+
+  /* ──────────────────────────── Border width ──────────────────────────── */
+
+  --border-width-thin:    1px;
+  --border-width-default: 1px;
+  --border-width-thick:   2px;
+
+  /* ──────────────────────────── Sizing ──────────────────────────── */
+
+  /* Control heights (inputs, buttons, fields) */
+  --size-control-xs: 24px;
+  --size-control-sm: 28px;
+  --size-control-md: 26px;
+  --size-control-lg: 34px;
+  --size-control-xl: 48px;
+
+  /* Canonical single-line input/control height — the one knob for every text
+   * input, select and slider so they always line up. Change here to resize all. */
+  --size-input: var(--size-control-lg);
+
+  /* Icon sizes */
+  --size-icon-xs: 12px;
+  --size-icon-sm: 14px;
+  --size-icon-md: 16px;
+  --size-icon-lg: 20px;
+  --size-icon-xl: 24px;
+
+  /* Layout */
+  --size-sidebar: 280px;
+  --size-content-max: 720px;
+
+  /* ──────────────────────────── Shadows ──────────────────────────── */
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-focus: 0 0 0 3px rgba(255, 255, 255, 0.10);
+
+  /* ──────────────────────────── Transitions ──────────────────────────── */
+
+  --transition-fast:   120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow:   320ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ──────────────────────────── Z-index layers ──────────────────────────── */
+
+  --z-base:    1;
+  --z-raised:  10;
+  --z-overlay: 100;
+  --z-modal:   1000;
+  --z-tooltip: 10000;
+}

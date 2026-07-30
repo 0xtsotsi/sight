@@ -56,7 +56,7 @@ export default function PropsPanel({
     return (
       <div className="panel-section grow" style={{ flex: '1 1 50%' }}>
         <div className="panel-header">
-          <h2>Props</h2>
+          <h2>Settings</h2>
         </div>
         <div className="props-empty">Select a component to edit its props.</div>
       </div>

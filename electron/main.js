@@ -27,6 +27,7 @@ const {
   parseSlots,
 } = require('./astroParser');
 const { scaffoldProject } = require('./scaffold');
+const { importersOf } = require('./cmsRefs');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
@@ -1126,10 +1127,20 @@ ipcMain.handle('watch:start', async (_e, projectPath) => {
 
   let pending = new Set();
   let timer = null;
+  let cmsTimer = null;
 
   watcher = fs.watch(srcDir, { recursive: true }, (_event, filename) => {
     if (!filename) return;
     const name = filename.toString();
+    // JSON data files feed the CMS panel, not the page model.
+    if (/\.json$/i.test(name)) {
+      const full = path.join(srcDir, name);
+      const wrote = selfWrites.get(path.resolve(full));
+      if (wrote && Date.now() - wrote < 1000) return;
+      clearTimeout(cmsTimer);
+      cmsTimer = setTimeout(() => send('cms:changed', {}), 200);
+      return;
+    }
     if (!/\.(astro|md|html)$/i.test(name)) return;
     const full = path.join(srcDir, name);
     // Ignore events caused by the app's own recent writes.
@@ -1323,6 +1334,156 @@ ipcMain.handle('assets:mkdir', async (_e, { projectPath, parentRel, name }) => {
 });
 
 // ---------------------------------------------------------------------------
+// CMS — JSON data files under src/ edited as collections
+// ---------------------------------------------------------------------------
+
+const MAX_CMS_BYTES = 2 * 1024 * 1024;
+// Config files that happen to live in src/ aren't content.
+const CMS_SKIP = /^(tsconfig|jsconfig|package|package-lock|env\.d)\.json$/i;
+
+// Refuses paths that escape src/.
+function cmsAbs(projectPath, rel) {
+  const root = path.resolve(projectPath, 'src');
+  const abs = path.resolve(root, rel || '');
+  if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error('Invalid data path');
+  return abs;
+}
+
+// Every .json under src/, with its parsed contents. Files are small enough
+// that parsing them all up front is cheaper than a round trip per collection,
+// and it lets the panel show item counts without opening anything.
+ipcMain.handle('cms:list', async (_e, projectPath) => {
+  const root = path.join(projectPath, 'src');
+  const files = [];
+  if (!fs.existsSync(root)) return { files };
+  const walk = (dir, rel) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      const entryRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(full, entryRel);
+      } else if (/\.json$/i.test(entry.name) && !CMS_SKIP.test(entry.name)) {
+        const file = { rel: entryRel, name: entry.name, dir: rel, abs: full };
+        try {
+          const stat = fs.statSync(full);
+          file.size = stat.size;
+          if (stat.size > MAX_CMS_BYTES) {
+            file.error = 'This file is too large to edit here (over 2 MB).';
+          } else {
+            file.data = JSON.parse(fs.readFileSync(full, 'utf8'));
+          }
+        } catch (err) {
+          file.error = `Not valid JSON — ${String(err.message || err).replace(/\s+in JSON.*$/, '')}`;
+        }
+        files.push(file);
+      }
+    }
+  };
+  walk(root, '');
+  files.sort((a, b) => a.rel.localeCompare(b.rel));
+  return { files };
+});
+
+ipcMain.handle('cms:read', async (_e, { projectPath, rel }) => {
+  const abs = cmsAbs(projectPath, rel);
+  return { data: JSON.parse(fs.readFileSync(abs, 'utf8')) };
+});
+
+// Writes the collection back, matching the file's existing indentation so
+// the diff stays limited to what the user actually changed.
+ipcMain.handle('cms:write', async (_e, { projectPath, rel, data }) => {
+  const abs = cmsAbs(projectPath, rel);
+  // A save still in flight when the collection is deleted must not recreate
+  // the file — the editor closes a moment after the delete lands.
+  if (!fs.existsSync(abs)) throw new Error(`src/${rel} no longer exists.`);
+  let indent = 2;
+  let trailingNewline = true;
+  const before = fs.readFileSync(abs, 'utf8');
+  const match = before.match(/\n([ \t]+)\S/);
+  if (match) indent = match[1] === '\t' ? '\t' : match[1].length;
+  trailingNewline = /\n$/.test(before);
+  markSelfWrite(abs);
+  fs.writeFileSync(abs, JSON.stringify(data, null, indent) + (trailingNewline ? '\n' : ''), 'utf8');
+  return { ok: true };
+});
+
+// New collections land in src/data/, the conventional home for Astro content
+// that isn't a content collection.
+ipcMain.handle('cms:create', async (_e, { projectPath, name }) => {
+  const slug = String(name).trim().toLowerCase().replace(/\.json$/i, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) throw new Error('Give the collection a name.');
+  const rel = `data/${slug}.json`;
+  const abs = cmsAbs(projectPath, rel);
+  if (fs.existsSync(abs)) throw new Error(`src/${rel} already exists.`);
+  markSelfWrite(abs);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, '[]\n', 'utf8');
+  send('cms:changed', {});
+  return { rel };
+});
+
+// A field's type is inferred from its values, which can't tell a phone number
+// from a line of text — or anything at all from an empty field. Types the user
+// picked explicitly are remembered here, keyed by collection and field path.
+const cmsMetaPath = (projectPath) => path.join(projectPath, '.stacki', 'cms.json');
+
+function readCmsMeta(projectPath) {
+  try {
+    return JSON.parse(fs.readFileSync(cmsMetaPath(projectPath), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+ipcMain.handle('cms:meta', async (_e, projectPath) => ({ meta: readCmsMeta(projectPath) }));
+
+ipcMain.handle('cms:setMeta', async (_e, { projectPath, rel, fields }) => {
+  const meta = readCmsMeta(projectPath);
+  if (fields && Object.keys(fields).length) meta[rel] = fields;
+  else delete meta[rel];
+  const file = cmsMetaPath(projectPath);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(meta, null, 2) + '\n', 'utf8');
+  return { ok: true };
+});
+
+// Deleting a collection rewrites the pages that imported it (see cmsRefs.js):
+// the import becomes `const clients = []`, which leaves every
+// `clients.map(...)` on the page working and rendering nothing.
+
+ipcMain.handle('cms:usage', async (_e, { projectPath, rel }) => {
+  const abs = cmsAbs(projectPath, rel);
+  return { files: importersOf(projectPath, abs).map((h) => h.rel) };
+});
+
+ipcMain.handle('cms:delete', async (_e, { projectPath, rel }) => {
+  const abs = cmsAbs(projectPath, rel);
+  const hits = importersOf(projectPath, abs);
+  for (const hit of hits) {
+    markSelfWrite(hit.file);
+    fs.writeFileSync(hit.file, hit.next, 'utf8');
+  }
+  await shell.trashItem(abs);
+  const meta = readCmsMeta(projectPath);
+  if (meta[rel]) {
+    delete meta[rel];
+    fs.writeFileSync(cmsMetaPath(projectPath), JSON.stringify(meta, null, 2) + '\n', 'utf8');
+  }
+  send('cms:changed', {});
+  // Our own writes are invisible to the watcher, so tell the app directly —
+  // an open page holding the old import needs to reload.
+  if (hits.length) send('fs:changed', { files: hits.map((h) => h.file) });
+  return { ok: true, rewritten: hits.map((h) => h.rel) };
+});
+
+// ---------------------------------------------------------------------------
 // HTML chunks — resolution lives in astroParser so the dev server's marker
 // config can reuse it (see writeMarkerConfig).
 // ---------------------------------------------------------------------------
@@ -1368,16 +1529,46 @@ ipcMain.handle('page:read', async (_e, pagePath) => {
   return { ...parsed, source };
 });
 
-ipcMain.handle('page:write', async (_e, { pagePath, model }) => {
+// Astro's dev server serves a page's <style> block ONE EDIT BEHIND: after the file
+// changes it re-renders the HTML correctly, but hands the browser the *previous*
+// transform of `…?astro&type=style&…`, and that module overwrites the (correct) CSS
+// inlined in the SSR'd HTML. So a style edit only appeared on the canvas once the NEXT
+// edit pushed the stale transform along — which read as "the panel writes the wrong
+// value". Writing the same bytes a second time flushes it. Plain .css files transform
+// correctly, so this is only for .astro files that carry a <style> block.
+const STYLE_NUDGE_MS = 150;
+const styleNudges = new Map(); // path -> pending timer
+
+function writePageText(pagePath, text) {
   markSelfWrite(pagePath);
-  fs.writeFileSync(pagePath, serializePage(model), 'utf8');
+  fs.writeFileSync(pagePath, text, 'utf8');
+  if (!/<style[\s>]/i.test(text)) return;
+  clearTimeout(styleNudges.get(pagePath)); // a newer edit supersedes this one's nudge
+  styleNudges.set(
+    pagePath,
+    setTimeout(() => {
+      styleNudges.delete(pagePath);
+      try {
+        // Skip it if anything has changed the file since — the nudge must never
+        // resurrect text that's already been superseded.
+        if (fs.readFileSync(pagePath, 'utf8') !== text) return;
+        markSelfWrite(pagePath);
+        fs.writeFileSync(pagePath, text, 'utf8');
+      } catch {
+        /* file moved or deleted — nothing to flush */
+      }
+    }, STYLE_NUDGE_MS)
+  );
+}
+
+ipcMain.handle('page:write', async (_e, { pagePath, model }) => {
+  writePageText(pagePath, serializePage(model));
   writeChunks(model);
   return { ok: true };
 });
 
 ipcMain.handle('page:writeRaw', async (_e, { pagePath, source }) => {
-  markSelfWrite(pagePath);
-  fs.writeFileSync(pagePath, source, 'utf8');
+  writePageText(pagePath, source);
   return { ok: true };
 });
 
@@ -1972,6 +2163,81 @@ async function doDevStart(projectPath) {
   throw lastErr;
 }
 
+// ---------------------------------------------------------------------------
+// Style sources
+//
+// Where the style panel can author CSS: every stylesheet in the project, plus
+// (added on the renderer side) the <style> blocks on the current page and in
+// its components. Anything under node_modules, dist or the app's own generated
+// config is skipped — those aren't the author's to edit.
+// ---------------------------------------------------------------------------
+
+// Same containment rule the asset protocol uses: the style panel writes only
+// inside the project that is currently open.
+function assertInProject(filePath) {
+  const abs = path.resolve(String(filePath || ""));
+  if (!openProjectRoot || !(abs + path.sep).startsWith(openProjectRoot + path.sep)) {
+    throw new Error("Refusing to touch a file outside the open project.");
+  }
+  return abs;
+}
+
+const CSS_SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.astro', 'release', '.avb']);
+
+function listCssFiles(root) {
+  const out = [];
+  const walk = (dir, rel) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') && entry.name !== '.') continue;
+      const full = path.join(dir, entry.name);
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (CSS_SKIP_DIRS.has(entry.name)) continue;
+        walk(full, relPath);
+      } else if (/\.(css|scss|sass|less)$/i.test(entry.name)) {
+        let size = 0;
+        try {
+          size = fs.statSync(full).size;
+        } catch {
+          /* unreadable — still list it, the read will report the error */
+        }
+        out.push({ rel: toPosix(relPath), name: entry.name, path: full, size });
+      }
+    }
+  };
+  walk(root, '');
+  // Shallow paths first (src/styles/global.css before a deeply nested partial),
+  // then alphabetical — the file you want is usually near the top of the tree.
+  return out.sort((a, b) => {
+    const da = a.rel.split('/').length;
+    const db = b.rel.split('/').length;
+    return da - db || a.rel.localeCompare(b.rel);
+  });
+}
+
+ipcMain.handle('style:listFiles', async (_e, projectPath) => {
+  if (!projectPath) return { files: [] };
+  return { files: listCssFiles(projectPath) };
+});
+
+ipcMain.handle('style:readFile', async (_e, filePath) => {
+  const abs = assertInProject(filePath);
+  return { css: fs.readFileSync(abs, 'utf8') };
+});
+
+ipcMain.handle('style:writeFile', async (_e, { filePath, css }) => {
+  const abs = assertInProject(filePath);
+  markSelfWrite(abs); // the watcher must not treat our own write as external
+  fs.writeFileSync(abs, css, 'utf8');
+  return { ok: true };
+});
+
 ipcMain.handle('dev:stop', async () => {
   stopDevServer();
   return { ok: true };
@@ -2080,7 +2346,17 @@ ipcMain.handle('git:info', async (_e, projectPath) => {
     info.remote = null;
   }
   try {
-    info.dirty = (await git(projectPath, ['status', '--porcelain'])).stdout.trim().length > 0;
+    const out = (await git(projectPath, ['status', '--porcelain'])).stdout;
+    // Porcelain v1 is "XY path" — two status columns, a space, then the path
+    // (renames as "old -> new"). Don't trim the line before slicing: the
+    // first column is a space for worktree-only changes.
+    const lines = out.split('\n').filter((l) => l.trim());
+    info.dirty = lines.length > 0;
+    info.dirtyFiles = lines.slice(0, 50).map((l) => {
+      const p = l.slice(3);
+      const arrow = p.lastIndexOf(' -> ');
+      return (arrow === -1 ? p : p.slice(arrow + 4)).replace(/^"|"$/g, '');
+    });
   } catch {
     /* ignore */
   }
@@ -2133,9 +2409,37 @@ ipcMain.handle('git:init', async (_e, projectPath) => {
 
 ipcMain.handle('git:checkout', async (_e, { projectPath, branch, create }) => {
   const args = create ? ['checkout', '-b', branch] : ['checkout', branch];
-  await git(projectPath, args);
+  try {
+    await git(projectPath, args);
+  } catch (err) {
+    const detail = String(err.stderr || err.message || '');
+    // Git refuses to switch when the working tree would be clobbered, and
+    // leaves HEAD where it was — every later edit then lands on the branch
+    // the user thought they left. Say so plainly instead of passing the raw
+    // porcelain through.
+    if (/would be overwritten|Please commit your changes|overwritten by checkout/i.test(detail)) {
+      const files = detail
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l && !/^(error|Please|Aborting|warning)/i.test(l) && !l.endsWith(':'));
+      throw new Error(
+        `Still on "${(await currentBranch(projectPath)) || 'this branch'}" — switching to "${branch}" would overwrite uncommitted changes` +
+          (files.length ? ` in ${files.slice(0, 4).join(', ')}` : '') +
+          '. Commit them first, then switch.'
+      );
+    }
+    throw new Error(detail.trim() || `Could not switch to "${branch}".`);
+  }
   return { ok: true };
 });
+
+async function currentBranch(projectPath) {
+  try {
+    return (await git(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  } catch {
+    return null;
+  }
+}
 
 ipcMain.handle('git:commit', async (_e, { projectPath, message }) => {
   await git(projectPath, ['add', '-A']);

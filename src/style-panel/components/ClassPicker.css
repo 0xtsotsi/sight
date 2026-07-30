@@ -1,0 +1,48 @@
+/* ClassPicker — the shared class-choosing control (see ClassPicker.tsx). */
+
+.class-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.class-picker_tag {
+  min-width: 0;
+  padding: var(--space-3) var(--space-5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-class-tag-bg);
+  color: var(--color-accent);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.5;
+  overflow-wrap: anywhere;
+}
+
+/* Token colors by kind — classes blue (default), tag magenta, attributes neutral. */
+.class-picker_tag.is-tag {
+  background: var(--color-tag-bg);
+  color: var(--color-accent);
+}
+.class-picker_tag.is-attribute {
+  background: var(--color-bg-surface-raised);
+  color: var(--color-text-secondary);
+}
+
+.class-picker_tag.is-active {
+  opacity: 1;
+  cursor: default;
+}
+
+.class-picker_tag:disabled {
+  cursor: not-allowed;
+}
+
+.class-picker_tag:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 var(--border-width-default) var(--color-border-focus);
+}
