@@ -1,0 +1,656 @@
+import React, { useEffect, useRef, useState } from 'react';
+import Dropdown from '../ui/Dropdown.jsx';
+import { canContainTag } from '../elementSchemas.js';
+import { setDrag, clearDrag, getDrag } from '../dragState.js';
+import {
+  LayoutIcon,
+  ElementComponentIcon,
+  TextIcon,
+  CommentIcon,
+  CodeIcon,
+  ChevronRightIcon,
+  ChevronDownIcon,
+  DragIcon,
+  FileIcon,
+  RepeatIcon,
+  ExpandVerticalIcon,
+  CollapseVerticalIcon,
+  elementIcon,
+} from '../ui/Icons.jsx';
+
+
+// The page structure tree: layout wrapper + nested nodes (components,
+// elements, text, comments). Supports:
+//  - dropping palette items (avb/component) on gaps (sibling insert) or
+//    directly on a node row (append as child)
+//  - reordering/reparenting existing nodes (avb/node) the same way
+//  - collapse/expand for nodes with children
+export default function StructurePanel({
+  pageState,
+  layouts,
+  currentLayoutName,
+  selectedId,
+  revealTick,
+  onSelect,
+  onHoverNode,
+  onChangeLayout,
+  onDropComponent,
+  onMoveNode,
+  onRemoveNode,
+  onCopyNode,
+  onDuplicateNode,
+  onPasteNode,
+  hasClipboard,
+  onRawChange,
+}) {
+  // dropTarget: {parentId, index} for gaps, {intoId} for node rows
+  const [dropTarget, setDropTarget] = useState(null);
+  // Manual expand/collapse overrides by node id; nodes not in the map use
+  // their default (text-only children start collapsed).
+  const [toggled, setToggled] = useState(() => new Map());
+  const [ctxMenu, setCtxMenu] = useState(null); // {x, y, nodeId}
+  // Expand-all / collapse-all toggle in the header, with a delayed tooltip.
+  const [allExpanded, setAllExpanded] = useState(false);
+  const [headerTip, setHeaderTip] = useState(null); // {left, top}
+  const tipTimer = useRef(null);
+  useEffect(() => () => clearTimeout(tipTimer.current), []);
+
+  const showTipSoon = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    clearTimeout(tipTimer.current);
+    tipTimer.current = setTimeout(
+      () => setHeaderTip({ left: rect.left + rect.width / 2, top: rect.bottom + 8 }),
+      500
+    );
+  };
+  const hideTip = () => {
+    clearTimeout(tipTimer.current);
+    setHeaderTip(null);
+  };
+
+  // Arrow-key navigation from the selected node: ←/→ between siblings,
+  // ↑ to the parent, ↓ to the first child (expanding a collapsed node so
+  // the child is visible).
+  useEffect(() => {
+    if (!pageState?.editable || !selectedId) return;
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+      const t = e.target;
+      if (
+        t instanceof HTMLElement &&
+        (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+      ) {
+        return;
+      }
+      const found = findWithParent(pageState.model.nodes, selectedId, null);
+      if (!found) return;
+      e.preventDefault(); // keep arrows from scrolling the panel
+      const { node, parent, siblings, index } = found;
+      let next = null;
+      if (e.key === 'ArrowLeft') next = siblings[index - 1];
+      else if (e.key === 'ArrowRight') next = siblings[index + 1];
+      else if (e.key === 'ArrowUp') next = parent;
+      else if (
+        e.key === 'ArrowDown' &&
+        Array.isArray(node.children) &&
+        node.children.length > 0 &&
+        // Content-only children aren't shown in the navigator — don't
+        // descend into rows that don't exist.
+        !node.children.every(isContentOnlyChild)
+      ) {
+        const collapsed = toggled.has(node.id) ? toggled.get(node.id) : defaultCollapsed(node);
+        if (collapsed) setToggled((prev) => new Map(prev).set(node.id, false));
+        next = node.children[0];
+      }
+      if (next) onSelect(next.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pageState, selectedId, toggled, onSelect]);
+
+  // Reveal the selection: with everything collapsed by default, selecting a
+  // node from the canvas or breadcrumbs must expand its ancestors.
+  useEffect(() => {
+    if (!pageState?.editable || !selectedId || selectedId === 'frontmatter') return;
+    const chain = [];
+    const walk = (list, trail) => {
+      for (const n of list) {
+        if (n.id === selectedId) {
+          chain.push(...trail);
+          return true;
+        }
+        if (Array.isArray(n.children) && walk(n.children, [...trail, n])) return true;
+      }
+      return false;
+    };
+    walk(pageState.model.nodes, []);
+    if (!chain.length) return;
+    setToggled((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const a of chain) {
+        const collapsed = next.has(a.id) ? next.get(a.id) : defaultCollapsed(a);
+        if (collapsed) {
+          next.set(a.id, false);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [pageState, selectedId]);
+
+  // Clicking an element on the page scrolls its row into view here — with no
+  // animation, and only when the row is off screen, so selecting something
+  // already visible leaves the list where it is. Waits a frame: the effect
+  // above may still need to expand the ancestors that mount the row.
+  const bodyRef = useRef(null);
+  const lastReveal = useRef(revealTick);
+  useEffect(() => {
+    if (revealTick === lastReveal.current) return; // a plain selection change
+    lastReveal.current = revealTick;
+    if (!selectedId) return;
+    const frame = requestAnimationFrame(() => {
+      const body = bodyRef.current;
+      const row = body?.querySelector(`[data-node-id="${CSS.escape(selectedId)}"]`);
+      if (!row) return;
+      const b = body.getBoundingClientRect();
+      const r = row.getBoundingClientRect();
+      if (r.top >= b.top && r.bottom <= b.bottom) return;
+      body.scrollTop += r.top - b.top - (b.height - r.height) / 2;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [revealTick, selectedId]);
+
+  if (!pageState) {
+    return (
+      <div className="panel-section grow">
+        <div className="panel-header">
+          <h2>Navigator</h2>
+        </div>
+        <div className="props-empty">Select a page to edit.</div>
+      </div>
+    );
+  }
+
+  if (!pageState.editable) {
+    return (
+      <div className="panel-section grow">
+        <div className="panel-header">
+          <h2>Code</h2>
+        </div>
+        <div className="code-editor">
+          <div className="code-note">
+            {pageState.reason || 'This page cannot be edited visually.'} You can still edit
+            the source here — the preview updates live.
+          </div>
+          <textarea
+            spellCheck={false}
+            value={pageState.source}
+            onChange={(e) => onRawChange(e.target.value)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const { model } = pageState;
+
+  const clearDrop = () => setDropTarget(null);
+
+  const isDndPayload = (e) =>
+    e.dataTransfer.types.includes('avb/component') || e.dataTransfer.types.includes('avb/node');
+
+  const performDrop = (e, target) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearDrop();
+    const compName = e.dataTransfer.getData('avb/component');
+    const nodeId = e.dataTransfer.getData('avb/node');
+    if (compName) onDropComponent(compName, target);
+    else if (nodeId) onMoveNode(nodeId, target);
+  };
+
+  const isCollapsed = (node) =>
+    toggled.has(node.id) ? toggled.get(node.id) : defaultCollapsed(node);
+
+  const toggleCollapse = (node) =>
+    setToggled((prev) => new Map(prev).set(node.id, !isCollapsed(node)));
+
+  // Alternates between expanding and collapsing every node with children.
+  const toggleAll = () => {
+    const collapsed = allExpanded;
+    const map = new Map();
+    const walk = (list) =>
+      list.forEach((n) => {
+        if (Array.isArray(n.children) && n.children.length > 0) {
+          map.set(n.id, collapsed);
+          walk(n.children);
+        }
+      });
+    walk(model.nodes);
+    setToggled(map);
+    setAllExpanded(!allExpanded);
+  };
+
+  return (
+    <div className="panel-section grow">
+      <div className="panel-header">
+        <h2>Navigator</h2>
+        <button
+          className="ghost"
+          onMouseEnter={showTipSoon}
+          onMouseLeave={hideTip}
+          onClick={() => {
+            hideTip();
+            toggleAll();
+          }}
+        >
+          {allExpanded ? <CollapseVerticalIcon size={14} /> : <ExpandVerticalIcon size={14} />}
+        </button>
+      </div>
+      {headerTip && (
+        <div className="rail-tooltip below" style={{ left: headerTip.left, top: headerTip.top }}>
+          {allExpanded ? 'Collapse all' : 'Expand all'}
+        </div>
+      )}
+
+      <div className="panel-body" ref={bodyRef} onDragLeave={clearDrop}>
+        <div
+          className={`structure-node frontmatter-node ${selectedId === 'frontmatter' ? 'selected' : ''}`}
+          style={{ paddingLeft: 6 }}
+          onClick={() => onSelect('frontmatter')}
+        >
+          <span className="drag-handle" style={{ visibility: 'hidden' }}>
+            <DragIcon size={11} />
+          </span>
+          <span className="icon">
+            <CodeIcon size={12} />
+          </span>
+          <span className="label">Frontmatter</span>
+          <span className="prop-preview">
+            {(model.imports || []).length} import{(model.imports || []).length === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        {!hasNode(model.nodes, 'layout') && layouts.length > 0 && (
+          <div style={{ padding: '0 4px 8px' }}>
+            <Dropdown
+              value=""
+              placeholder="Add layout…"
+              options={layouts.map((l) => ({ value: l.name, label: l.name }))}
+              onChange={(v) => v && onChangeLayout(v)}
+            />
+          </div>
+        )}
+
+        <NodeList
+          nodes={model.nodes}
+          parentId={null}
+          depth={0}
+          selectedId={selectedId}
+          currentLayoutName={currentLayoutName}
+          onChangeLayout={onChangeLayout}
+          onHoverNode={onHoverNode}
+          isCollapsed={isCollapsed}
+          dropTarget={dropTarget}
+          setDropTarget={setDropTarget}
+          isDndPayload={isDndPayload}
+          performDrop={performDrop}
+          nodeById={(id) => findNodeIn(model.nodes, id)}
+          onSelect={onSelect}
+          onRemoveNode={onRemoveNode}
+          toggleCollapse={toggleCollapse}
+          openContextMenu={(x, y, nodeId) => {
+            onSelect(nodeId);
+            setCtxMenu({ x, y, nodeId });
+          }}
+        />
+
+        {model.nodes.length === 0 && (
+          <div
+            className={`drop-zone-empty ${dropTarget?.parentId === null && dropTarget?.index === 0 ? 'over' : ''}`}
+            onDragOver={(e) => {
+              if (isDndPayload(e)) {
+                e.preventDefault();
+                setDropTarget({ parentId: null, index: 0 });
+              }
+            }}
+            onDrop={(e) => performDrop(e, { parentId: null, index: 0 })}
+          >
+            Drag components here
+          </div>
+        )}
+      </div>
+
+      {ctxMenu && (
+        <ContextMenu
+          pos={ctxMenu}
+          canPaste={hasClipboard ? hasClipboard() : false}
+          onClose={() => setCtxMenu(null)}
+          onAction={(action) => {
+            setCtxMenu(null);
+            if (action === 'copy') onCopyNode(ctxMenu.nodeId);
+            else if (action === 'duplicate') onDuplicateNode(ctxMenu.nodeId);
+            else if (action === 'paste') onPasteNode();
+            else if (action === 'delete') onRemoveNode(ctxMenu.nodeId);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Right-click menu for navigator nodes.
+function ContextMenu({ pos, canPaste, onClose, onAction }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    const onScroll = (e) => {
+      if (ref.current && ref.current.contains(e.target)) return;
+      onClose();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onClose);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onClose);
+    };
+  }, [onClose]);
+
+  // Keep the menu on-screen.
+  const width = 200;
+  const itemCount = 4;
+  const height = itemCount * 26 + 18;
+  const left = Math.min(pos.x, window.innerWidth - width - 8);
+  const top = Math.min(pos.y, window.innerHeight - height - 8);
+
+  const Item = ({ action, label, shortcut, disabled }) => (
+    <div
+      className={`ctx-menu-item ${disabled ? 'disabled' : ''}`}
+      onClick={() => !disabled && onAction(action)}
+    >
+      <span>{label}</span>
+      {shortcut && <span className="ctx-shortcut">{shortcut}</span>}
+    </div>
+  );
+
+  return (
+    <div ref={ref} className="ctx-menu" style={{ left, top, width }}>
+      <Item action="copy" label="Copy" shortcut="⌘C" />
+      <Item action="paste" label="Paste" shortcut="⌘V" disabled={!canPaste} />
+      <Item action="duplicate" label="Duplicate" shortcut="⌘D" />
+      <div className="ctx-divider" />
+      <Item action="delete" label="Delete" shortcut="⌫" />
+    </div>
+  );
+}
+
+function NodeList({ nodes, parentId, depth, ...ctx }) {
+  return (
+    <>
+      {nodes.map((node, i) => (
+        <React.Fragment key={node.id}>
+          <Gap parentId={parentId} index={i} depth={depth} {...ctx} />
+          <TreeNode node={node} parentId={parentId} index={i} depth={depth} {...ctx} />
+        </React.Fragment>
+      ))}
+      {nodes.length > 0 && <Gap parentId={parentId} index={nodes.length} depth={depth} {...ctx} />}
+    </>
+  );
+}
+
+function findNodeIn(nodes, id) {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    if (Array.isArray(n.children)) {
+      const found = findNodeIn(n.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Whether the node currently being dragged may legally live inside `parent`
+// (null = page root). Components are opaque — their rendered markup is
+// unknown, so they're never blocked.
+function acceptsDrag(parent) {
+  const d = getDrag();
+  if (!d || !d.tag || d.nodeKind !== 'element') return true;
+  if (!parent || parent.kind !== 'element') return true;
+  return canContainTag(parent.name, d.tag);
+}
+
+function Gap({ parentId, index, depth, dropTarget, setDropTarget, isDndPayload, performDrop, nodeById }) {
+  const active =
+    dropTarget && dropTarget.parentId === parentId && dropTarget.index === index && !dropTarget.intoId;
+  const ok = acceptsDrag(parentId ? nodeById(parentId) : null);
+  return (
+    <div
+      className="nav-gap"
+      style={{ marginLeft: depth * 16 }}
+      onDragOver={(e) => {
+        if (ok && isDndPayload(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+          setDropTarget({ parentId, index });
+        }
+      }}
+      onDrop={(e) => ok && performDrop(e, { parentId, index })}
+    >
+      {active && <div className="drop-indicator" />}
+    </div>
+  );
+}
+
+function TreeNode({ node, parentId, index, depth, ...ctx }) {
+  const {
+    selectedId,
+    currentLayoutName,
+    isCollapsed,
+    dropTarget,
+    setDropTarget,
+    isDndPayload,
+    performDrop,
+    onSelect,
+    onHoverNode,
+    toggleCollapse,
+    openContextMenu,
+  } = ctx;
+
+  const isLayoutNode = node.id === 'layout';
+  const isSelected = selectedId === node.id;
+
+  // Keep the selected row visible while navigating with the arrow keys.
+  const rowRef = useRef(null);
+  useEffect(() => {
+    if (isSelected) rowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [isSelected]);
+
+  const hasChildren = Array.isArray(node.children) && node.children.length > 0;
+  // Pure text (plus simple {expr} interpolations) is edited via the Content
+  // field — showing those as rows is noise until real tags are involved.
+  const showChildren = hasChildren && !node.children.every(isContentOnlyChild);
+  const canHostChildren =
+    node.kind === 'component' ||
+    node.kind === 'element' ||
+    node.kind === 'chunk-group' ||
+    node.kind === 'map';
+  const nodeCollapsed = isCollapsed(node);
+  const isDropInto = dropTarget?.intoId === node.id;
+
+  let { icon, label, preview } = describeNode(node);
+  if (isLayoutNode) {
+    icon = <LayoutIcon size={13} />;
+    label = currentLayoutName || node.name;
+    preview = '';
+  }
+
+  return (
+    <>
+      <div
+        ref={rowRef}
+        data-node-id={node.id}
+        className={`structure-node ${node.kind === 'component' ? 'is-component' : ''} ${node.kind === 'map' ? 'is-map' : ''} ${isLayoutNode ? 'layout-node' : ''} ${isSelected ? 'selected' : ''}`}
+        style={{
+          paddingLeft: 6 + depth * 16,
+          ...(isDropInto ? { borderColor: 'var(--accent)', background: 'var(--accent-soft)' } : {}),
+        }}
+        draggable={node.kind !== 'chunk-group'}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          e.dataTransfer.setData('avb/node', node.id);
+          e.dataTransfer.effectAllowed = 'move';
+          setDrag({ kind: 'node', id: node.id, nodeKind: node.kind, tag: node.name });
+        }}
+        onDragEnd={clearDrag}
+        onDragOver={(e) => {
+          if (canHostChildren && acceptsDrag(node) && isDndPayload(e)) {
+            e.preventDefault();
+            e.stopPropagation();
+            setDropTarget({ intoId: node.id });
+          }
+        }}
+        onDrop={(e) => {
+          if (canHostChildren && acceptsDrag(node)) {
+            performDrop(e, {
+              parentId: node.id,
+              index: Array.isArray(node.children) ? node.children.length : 0,
+            });
+          }
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect(node.id);
+        }}
+        onMouseEnter={() => onHoverNode && onHoverNode(node.id)}
+        onMouseLeave={() => onHoverNode && onHoverNode(null)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openContextMenu(e.clientX, e.clientY, node.id);
+        }}
+      >
+        {showChildren ? (
+          <span
+            className="drag-handle"
+            style={{ cursor: 'pointer', opacity: 1 }}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleCollapse(node);
+            }}
+          >
+            {nodeCollapsed ? <ChevronRightIcon size={10} /> : <ChevronDownIcon size={10} />}
+          </span>
+        ) : (
+          <span className="drag-handle">
+            <DragIcon size={11} />
+          </span>
+        )}
+        <span className="icon">{icon}</span>
+        <span className="label" style={node.kind === 'text' ? { fontWeight: 400, fontStyle: 'italic' } : {}}>
+          {label}
+        </span>
+        {preview && <span className="prop-preview">{preview}</span>}
+      </div>
+
+      {showChildren && !nodeCollapsed && (
+        <NodeList nodes={node.children} parentId={node.id} depth={depth + 1} {...ctx} />
+      )}
+    </>
+  );
+}
+
+// Children the Content field fully covers: plain text and simple {expr}
+// interpolations (single braces, no JSX). These get no navigator rows.
+function isContentOnlyChild(c) {
+  return (
+    c.kind === 'text' ||
+    (c.kind === 'expr' && /^\{[^{}]*\}$/.test(c.value) && !c.value.includes('<'))
+  );
+}
+
+// Locates a node plus its parent, sibling list, and index — the context the
+// arrow-key navigation needs.
+function findWithParent(nodes, id, parent) {
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.id === id) return { node: n, parent, siblings: nodes, index: i };
+    if (Array.isArray(n.children)) {
+      const found = findWithParent(n.children, id, n);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function hasNode(list, id) {
+  for (const n of list) {
+    if (n.id === id) return true;
+    if (Array.isArray(n.children) && hasNode(n.children, id)) return true;
+  }
+  return false;
+}
+
+// Components/elements whose children are all text (or comments) start
+// collapsed — their text is editable via the Content field in the props panel.
+// Everything starts collapsed; expanding is always an explicit action
+// (chevron, expand-all, arrow-down navigation, or selection reveal).
+function defaultCollapsed(node) {
+  return Array.isArray(node.children) && node.children.length > 0;
+}
+
+function describeNode(node) {
+  switch (node.kind) {
+    case 'text':
+      return { icon: <TextIcon size={12} />, label: truncate(node.value, 34), preview: '' };
+    case 'comment':
+      return { icon: <CommentIcon size={12} />, label: truncate(node.value.trim(), 30), preview: 'comment' };
+    case 'raw':
+      return { icon: <CodeIcon size={12} />, label: node.name, preview: 'raw' };
+    case 'raw-line':
+      return { icon: <CodeIcon size={12} />, label: truncate(node.value, 30), preview: '' };
+    case 'element': {
+      // Webflow-style label: the first class name when the element has
+      // classes, the bare tag name otherwise.
+      const cls = node.props?.class;
+      const classes =
+        cls && cls.type === 'string' ? cls.value.trim().split(/\s+/).filter(Boolean) : [];
+      const label = classes.length ? truncate(classes[0], 40) : node.name;
+      return { icon: elementIcon(node.name), label, preview: '' };
+    }
+    case 'chunk-group':
+      return { icon: <FileIcon size={12} />, label: node.name, preview: 'chunk' };
+    case 'expr':
+      return {
+        icon: <CodeIcon size={12} />,
+        label: truncate(node.value.replace(/\s+/g, ' '), 34),
+        preview: 'code',
+      };
+    case 'map': {
+      const at = node.head.indexOf('.map');
+      return {
+        icon: <RepeatIcon size={12} />,
+        label: at > 0 ? node.head.slice(0, at + 4) : truncate(node.head, 24),
+        preview: 'loop',
+      };
+    }
+    default:
+      return { icon: <ElementComponentIcon size={14} />, label: node.name, preview: '' };
+  }
+}
+
+function truncate(s, n) {
+  s = String(s);
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
