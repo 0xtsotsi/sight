@@ -6,10 +6,11 @@ import AutoTextarea from '../ui/AutoTextarea.jsx';
 import ClassInput from '../ui/ClassInput.jsx';
 import CodeEditor from '../ui/CodeEditor.jsx';
 import StyleEditor, { collapseDeclarations } from '../ui/StyleEditor.jsx';
+import ExprInput from '../ui/ExprInput.jsx';
 import RichContent, { isInlineOnly } from '../ui/RichContent.jsx';
 import AssetField from '../ui/AssetField.jsx';
 import { looksLikeAssetPath, mediaKindFor } from '../ui/AssetThumb.jsx';
-import { dataSuggestions } from '../dataSuggest.js';
+import { dataSuggestions, exprSuggestions } from '../dataSuggest.js';
 import LinkField from '../ui/LinkField.jsx';
 import {
   ResetIcon,
@@ -94,12 +95,11 @@ export default function PropsPanel({
           <label>
             <span className="prop-label">Code</span>
           </label>
-          <AutoTextarea
-            minRows={4}
-            spellCheck={false}
-            style={{ fontFamily: 'var(--mono)', fontSize: 11.5, whiteSpace: 'pre', userSelect: 'text' }}
+          <ExprInput
+            key={node.id}
             value={node.value}
-            onChange={(e) => onSetText(e.target.value)}
+            syncValue={node.value}
+            onCommit={(v) => v !== node.value && onSetText(v)}
           />
         </div>
       </div>
@@ -232,6 +232,10 @@ export default function PropsPanel({
   const canHoldText =
     node.kind === 'element' && !VOID_TAGS.has(String(node.name).toLowerCase());
   const showContentField = isInlineOnly(node.children) || (isEmpty && canHoldText);
+  // <slot> does take children, but they're the fallback Astro renders only
+  // when the caller passes nothing — labelling it "Content" reads as if it
+  // were what shows on the page.
+  const isSlot = node.kind === 'element' && node.name === 'slot';
 
   return (
     <div className="panel-section grow" style={{ flex: '1 1 50%', overflow: 'hidden' }}>
@@ -275,10 +279,21 @@ export default function PropsPanel({
             <label>
               <span className="prop-label">
                 <VariableTextSizeIcon size={12} className="prop-label-icon" />
-                Content
+                {isSlot ? 'Fallback' : 'Content'}
               </span>
             </label>
-            <RichContent key={node.id} nodes={node.children} onChange={onSetInline} />
+            <RichContent
+            key={node.id}
+            nodes={node.children}
+            exprOptions={exprSuggestions(loopContext || {})}
+            onChange={onSetInline}
+          />
+            {isSlot && (
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6, lineHeight: 1.5 }}>
+                Shown only when whatever uses this component passes nothing for
+                the slot.
+              </div>
+            )}
           </div>
         )}
         {schema.map((field) => (
@@ -705,97 +720,44 @@ function parseMapHead(head) {
 
 const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
 
-// Text input with a suggestion dropdown (used by the loop Data field).
-// `suggestions(query)` returns [{insert, label, hint}]. Typing only updates
-// local state (`onInput`); the value is committed (`onCommit`) on blur,
-// Enter, or picking a suggestion — never per keystroke, so half-typed
-// values are never written into the page.
-function SuggestField({ value, placeholder, suggestions, onInput, onCommit }) {
-  const [focused, setFocused] = useState(false);
-  const [highlight, setHighlight] = useState(0);
-  const [pos, setPos] = useState(null);
-  const ref = useRef(null);
-  const matches = focused ? suggestions(value).slice(0, 12) : [];
-
-  useLayoutEffect(() => {
-    if (!focused || !matches.length || !ref.current) {
-      setPos(null);
-      return;
-    }
-    const r = ref.current.getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 4, width: r.width });
-  }, [focused, matches.length, value]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const pick = (s) => {
-    onInput(s.insert);
-    onCommit(s.insert);
-    setHighlight(0);
-  };
-
-  return (
-    <>
-      <input
-        ref={ref}
-        value={value}
-        placeholder={placeholder}
-        spellCheck={false}
-        onChange={(e) => {
-          onInput(e.target.value);
-          setHighlight(0);
-        }}
-        onFocus={() => setFocused(true)}
-        onBlur={() => {
-          setFocused(false);
-          onCommit(value);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowDown' && matches.length) {
-            e.preventDefault();
-            setHighlight((h) => Math.min(h + 1, matches.length - 1));
-          } else if (e.key === 'ArrowUp' && matches.length) {
-            e.preventDefault();
-            setHighlight((h) => Math.max(h - 1, 0));
-          } else if (e.key === 'Enter' || (e.key === 'Tab' && matches.length)) {
-            e.preventDefault();
-            if (matches.length) pick(matches[Math.min(highlight, matches.length - 1)]);
-            else onCommit(value);
-          } else if (e.key === 'Escape') {
-            e.currentTarget.blur();
-          }
-        }}
-      />
-      {pos && (
-        <div className="dd-popup class-suggest" style={{ left: pos.left, top: pos.top, width: pos.width }}>
-          {matches.map((s, i) => (
-            <div
-              key={s.insert}
-              className={`dd-option ${i === highlight ? 'highlight' : ''}`}
-              onMouseDown={(e) => e.preventDefault()}
-              onMouseEnter={() => setHighlight(i)}
-              onClick={() => pick(s)}
-            >
-              <span className="dd-option-label">{s.label}</span>
-              {s.hint && <span className="dd-hint">{s.hint}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
+// "No source yet" has to be written as real code, since the head is what
+// lands in the page. An empty literal is valid, renders nothing, and — unlike
+// a placeholder name like `items` — can't throw "items is not defined" and
+// take the whole preview down before the user has picked anything.
+const NO_SOURCE = '[]';
+const CUSTOM_SOURCE = '__custom__'; // not a valid expression, so it can't collide
+const DEFAULT_ITEM = 'item'; // a value no expression can collide with
 
 function MapEditor({ node, loopContext, onSetText }) {
   const parsed = parseMapHead(node.head);
   const [fields, setFields] = useState(parsed || { data: '', item: '', index: '' });
   const lastBuiltRef = useRef(node.head);
 
+  // Everything on the page that can actually be looped: frontmatter lists,
+  // imports, the items of enclosing loops.
+  const sources = React.useMemo(
+    () => dataSuggestions(loopContext || {}, ''),
+    // loopContext is rebuilt per render in App, so key on its contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(loopContext || {})]
+  );
+  const isCustomData = (data) => {
+    const d = (data || '').trim();
+    return !!d && d !== NO_SOURCE && !sources.some((s) => s.insert === d);
+  };
+  const [custom, setCustom] = useState(() => isCustomData(fields.data));
+
   // External changes (undo, file reload, code edits below) re-sync fields.
   useEffect(() => {
     if (node.head !== lastBuiltRef.current) {
       const p = parseMapHead(node.head);
-      if (p) setFields(p);
+      if (p) {
+        setFields(p);
+        setCustom(isCustomData(p.data));
+      }
       lastBuiltRef.current = node.head;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node.head]);
 
   // Typing only updates local state; the head is written on blur/Enter/pick
@@ -808,14 +770,36 @@ function MapEditor({ node, loopContext, onSetText }) {
     if (!next.data.trim() || !itemOk || !indexOk) return; // incomplete — don't write broken code
     const head = `${next.data.trim()}.map((${next.item}${next.index ? `, ${next.index}` : ''}) => (`;
     if (head === node.head) return;
+    // Renaming the item or index has to carry into the children that
+    // reference it. Only a rename counts — adding or removing an index
+    // leaves nothing to point the old name at.
+    const prev = parseMapHead(node.head);
+    const renames = [];
+    if (prev) {
+      if (prev.item && next.item && prev.item !== next.item) {
+        renames.push({ from: prev.item, to: next.item });
+      }
+      if (prev.index && next.index && prev.index !== next.index) {
+        renames.push({ from: prev.index, to: next.index });
+      }
+    }
     lastBuiltRef.current = head;
-    onSetText(head);
+    onSetText(head, renames);
   };
   const commitOnEnter = (e) => {
     if (e.key === 'Enter') commit(fields);
   };
 
+  // Changing the source changes what the item *is*, so a name describing the
+  // old data ("service" for a list of projects) is worse than none. Back to
+  // the default; the rename above carries the children with it.
+  const commitSource = (data) => {
+    const changed = (parseMapHead(node.head)?.data || '') !== data.trim();
+    commit({ ...fields, data, item: changed ? DEFAULT_ITEM : fields.item });
+  };
+
   const parseableNow = !!parseMapHead(node.head);
+  const isNoSource = !fields.data.trim() || fields.data.trim() === NO_SOURCE;
   const itemBad = fields.item !== '' && !IDENT_RE.test(fields.item);
   const indexBad = fields.index !== '' && !IDENT_RE.test(fields.index);
 
@@ -827,13 +811,39 @@ function MapEditor({ node, loopContext, onSetText }) {
             <label>
               <span className="prop-label">Data</span>
             </label>
-            <SuggestField
-              value={fields.data}
-              placeholder="e.g. services"
-              suggestions={(q) => dataSuggestions(loopContext || {}, q)}
-              onInput={(v) => update({ data: v })}
-              onCommit={(v) => commit({ ...fields, data: v })}
+            <Dropdown
+              livePreview={false}
+              className={`dd-source ${custom || !isNoSource ? 'on' : ''}`}
+              value={custom ? CUSTOM_SOURCE : isNoSource ? '' : fields.data.trim()}
+              options={[
+                { value: '', label: 'None' },
+                ...sources.map((s) => ({ value: s.insert, label: s.insert })),
+                { value: CUSTOM_SOURCE, label: 'Custom…' },
+              ]}
+              onChange={(v) => {
+                if (v === CUSTOM_SOURCE) {
+                  // Start the field empty rather than showing the `[]` that
+                  // stands for "none" — that's an implementation detail.
+                  setCustom(true);
+                  if (!isCustomData(fields.data)) update({ data: '' });
+                  return;
+                }
+                setCustom(false);
+                commitSource(v || NO_SOURCE);
+              }}
             />
+            {custom && (
+              <div style={{ marginTop: 6 }}>
+                <ExprInput
+                  autoFocus
+                  value={fields.data}
+                  syncValue={fields.data}
+                  placeholder="e.g. Astro.props.items"
+                  onChange={(v) => update({ data: v })}
+                  onCommit={(v) => commitSource(v)}
+                />
+              </div>
+            )}
           </div>
           <div className="props-field">
             <label>
@@ -880,12 +890,10 @@ function MapEditor({ node, loopContext, onSetText }) {
             Code
           </span>
         </label>
-        <AutoTextarea
-          minRows={1}
-          spellCheck={false}
-          style={{ fontFamily: 'var(--mono)', fontSize: 11.5, userSelect: 'text' }}
+        <ExprInput
           value={node.head}
-          onChange={(e) => onSetText(e.target.value)}
+          syncValue={node.head}
+          onCommit={(v) => v !== node.head && onSetText(v)}
         />
       </div>
     </>

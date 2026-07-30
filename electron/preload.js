@@ -243,6 +243,15 @@ if (!process.isMainFrame) {
     if (n.nodeType === 1) {
       if (n.tagName === 'TEMPLATE') return acc;
       b = n.getBoundingClientRect();
+      // `display: contents` generates no box of its own, so the element
+      // measures zero however big its content is. Astro sets it on
+      // <astro-island>/<astro-slot>, which is every client: component — they
+      // selected fine (hover walks the DOM) but drew no outline. Fall back to
+      // the children, which do generate boxes.
+      if (b.width === 0 && b.height === 0) {
+        for (const c of n.childNodes) acc = addNode(acc, c);
+        return acc;
+      }
     } else if (n.nodeType === 3 && n.textContent.trim()) {
       const range = document.createRange();
       range.selectNode(n);
@@ -367,6 +376,20 @@ if (!process.isMainFrame) {
         window.parent.postMessage({ type: 'avb:hover-node', path: null }, '*');
       }
     });
+    // Double-clicking a component opens it for editing, the way Webflow
+    // drills into one.
+    document.addEventListener(
+      'dblclick',
+      (e) => {
+        if (!designMode) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const p = pathContaining(e.target);
+        if (p) window.parent.postMessage({ type: 'avb:open-node', path: p }, '*');
+      },
+      true
+    );
+
     // In the design canvas (any frame the app tracks paths in), clicking
     // selects the node in the app instead of activating links/buttons.
     // Interactive preview frames never receive avb:track, so they keep
@@ -377,8 +400,10 @@ if (!process.isMainFrame) {
         if (!designMode) return;
         e.preventDefault();
         e.stopPropagation();
+        // A click that hits no marked node still reports (path null) — the
+        // app uses empty clicks to back out of component editing.
         const p = pathContaining(e.target);
-        if (p) window.parent.postMessage({ type: 'avb:click-node', path: p }, '*');
+        window.parent.postMessage({ type: 'avb:click-node', path: p || null }, '*');
       },
       true
     );
@@ -506,6 +531,7 @@ contextBridge.exposeInMainWorld('avb', {
 
   // Git
   gitInfo: invoke('git:info'),
+  ghStatus: invoke('git:ghStatus'),
   gitInit: invoke('git:init'),
   gitCheckout: invoke('git:checkout'),
   gitCommit: invoke('git:commit'),

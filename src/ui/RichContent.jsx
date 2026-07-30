@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { CheckIcon } from './Icons.jsx';
 
 // Rich inline-content editor for the props panel: a contentEditable field
 // showing a node's inline children (text + <strong>/<em>/<sup>/… tags) with a
@@ -36,13 +37,29 @@ const esc = (s) =>
 
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 
-export function nodesToHtml(nodes) {
+// `chipOf` is the set of expressions the panel can offer alternatives for.
+// Only those become chips: a chip is atomic and unedittable, so turning a
+// hand-written expression like {index + 1} into one would take away the only
+// way to fix the "+ 1". Anything not in the set stays literal, editable text.
+export function nodesToHtml(nodes, chippable) {
   let out = '';
   for (const n of nodes || []) {
     if (n.kind === 'text') {
       out += esc(n.value);
     } else if (n.kind === 'expr') {
-      out += esc(n.value); // shown as literal {expr} text
+      // An atomic chip: contentEditable=false makes the caret step over it
+      // as one unit, so it can't be part-deleted into broken code, while
+      // text either side stays editable. The braces live in data-expr; the
+      // label reads better without them.
+      const inner = n.value.replace(/^\{|\}$/g, '').trim();
+      if (chippable?.has(inner)) {
+        out += `<span class="expr-chip" contenteditable="false" data-expr="${esc(n.value).replace(
+          /"/g,
+          '&quot;'
+        )}">${esc(inner)}</span>`;
+      } else {
+        out += esc(n.value); // shown as literal {expr} text
+      }
     } else {
       const attrs = Object.entries(n.props || {})
         .map(([k, v]) =>
@@ -54,7 +71,7 @@ export function nodesToHtml(nodes) {
           ? n.name === 'br'
             ? '<br>'
             : `<${n.name}${attrs}></${n.name}>`
-          : `<${n.name}${attrs}>${nodesToHtml(n.children)}</${n.name}>`;
+          : `<${n.name}${attrs}>${nodesToHtml(n.children, chippable)}</${n.name}>`;
     }
   }
   return out;
@@ -81,6 +98,13 @@ function domToNodes(el) {
       return;
     }
     if (n.nodeType !== 1) return;
+    // A chip round-trips from its attribute, not its label — the label has
+    // the braces stripped for reading.
+    if (n.classList?.contains('expr-chip')) {
+      const value = n.getAttribute('data-expr') || `{${n.textContent}}`;
+      out.push({ kind: 'expr', value });
+      return;
+    }
     let name = n.tagName.toLowerCase();
     if (name === 'b') name = 'strong';
     if (name === 'i') name = 'em';
@@ -103,25 +127,35 @@ function domToNodes(el) {
   return out;
 }
 
-export default function RichContent({ nodes, onChange }) {
+export default function RichContent({ nodes, onChange, exprOptions }) {
   const hostRef = useRef(null);
   const bubbleRef = useRef(null);
-  const focusedRef = useRef(false);
   const lastEmittedRef = useRef(null);
   const savedRangeRef = useRef(null);
   const [bubble, setBubble] = useState(null); // raw selection anchor {x, top, bottom}
   const [pos, setPos] = useState(null); // measured/clamped {left, top, below, arrowX}
   const [states, setStates] = useState({}); // {bold, italic, …} at the selection
   const [linkMode, setLinkMode] = useState(false);
+  const [chipMenu, setChipMenu] = useState(null); // {chip, left, top, current}
   const [linkUrl, setLinkUrl] = useState('');
 
-  const html = nodesToHtml(nodes);
+  const chippable = React.useMemo(
+    () => new Set((exprOptions || []).map((o) => o.insert)),
+    [exprOptions]
+  );
+  const html = nodesToHtml(nodes, chippable);
 
-  // Load / external updates — but never clobber the DOM mid-edit.
+  // Load / external updates. lastEmittedRef holds the canonical html of the
+  // nodes this editor last emitted, so an incoming value that matches it is
+  // just our own edit echoing back through the app — leave the DOM (and the
+  // caret) alone. Anything else is a real external change: an undo, a file
+  // reload, a chip switched from elsewhere. Keying this off document focus
+  // instead used to drop those updates whenever the field happened to hold
+  // focus, which is exactly when an undo arrives.
   useEffect(() => {
     const el = hostRef.current;
     if (!el) return;
-    if (!focusedRef.current && html !== lastEmittedRef.current) {
+    if (html !== lastEmittedRef.current) {
       el.innerHTML = html;
       lastEmittedRef.current = html;
     }
@@ -130,8 +164,12 @@ export default function RichContent({ nodes, onChange }) {
   const emit = () => {
     const el = hostRef.current;
     if (!el) return;
-    lastEmittedRef.current = el.innerHTML;
-    onChange(domToNodes(el));
+    const next = domToNodes(el);
+    // Canonical, not el.innerHTML: the app hands the nodes back with ids
+    // added and the browser normalises markup as you type, so only the
+    // serialised form is comparable on the way back in.
+    lastEmittedRef.current = nodesToHtml(next, chippable);
+    onChange(next);
   };
 
   // Formatting state at the current selection, for highlighting buttons.
@@ -277,6 +315,50 @@ export default function RichContent({ nodes, onChange }) {
     </button>
   );
 
+  // Clicking a chip offers the other values in scope. mousedown rather than
+  // click, and preventDefault, so the caret never lands inside the chip.
+  const onChipMouseDown = (e) => {
+    const chip = e.target.closest?.(".expr-chip");
+    if (!chip) return;
+    e.preventDefault();
+    const r = chip.getBoundingClientRect();
+    setChipMenu({
+      chip,
+      left: r.left,
+      top: r.bottom + 4,
+      current: (chip.getAttribute("data-expr") || "").replace(/^\{|\}$/g, ""),
+    });
+  };
+
+  const pickExpr = (insert) => {
+    const chip = chipMenu?.chip;
+    setChipMenu(null);
+    if (!chip) return;
+    chip.setAttribute("data-expr", "{" + insert + "}");
+    chip.textContent = insert;
+    emit();
+  };
+
+  useEffect(() => {
+    if (!chipMenu) return;
+    const close = (e) => {
+      // Chips are excluded, not just the menu: React flushes this effect
+      // synchronously for a discrete event, so the listener is live while the
+      // very mousedown that opened the menu is still propagating to document.
+      // Without the exclusion the menu closes on the click that opened it —
+      // and clicking straight from one chip to another would too.
+      if (e.target.closest?.(".expr-menu, .expr-chip")) return;
+      setChipMenu(null);
+    };
+    const onKey = (e) => e.key === "Escape" && setChipMenu(null);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [chipMenu]);
+
   return (
     <>
       <div
@@ -285,12 +367,11 @@ export default function RichContent({ nodes, onChange }) {
         contentEditable
         suppressContentEditableWarning
         spellCheck={false}
-        onFocus={() => (focusedRef.current = true)}
         onBlur={() => {
-          focusedRef.current = false;
           setTimeout(() => setBubble((b) => (linkMode ? b : null)), 150);
         }}
         onInput={emit}
+        onMouseDown={onChipMouseDown}
         onKeyDown={(e) => {
           // Keep formatting shortcuts local; Enter inserts <br> (inline field).
           if (e.key === 'Enter') {
@@ -300,6 +381,32 @@ export default function RichContent({ nodes, onChange }) {
           }
         }}
       />
+      {chipMenu && (
+        <div
+          className="dd-popup expr-menu"
+          style={{ left: chipMenu.left, top: chipMenu.top, width: 220 }}
+        >
+          {(exprOptions || []).map((o) => (
+            <div
+              key={o.insert}
+              className={`dd-option ${o.insert === chipMenu.current ? "selected" : ""}`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pickExpr(o.insert)}
+            >
+              <span className="dd-check">
+                {o.insert === chipMenu.current ? <CheckIcon size={11} /> : null}
+              </span>
+              <span className="dd-option-label">{o.insert}</span>
+              {o.hint && <span className="dd-hint">{o.hint}</span>}
+            </div>
+          ))}
+          {(exprOptions || []).length === 0 && (
+            <div className="dd-option dim">
+              <span className="dd-option-label">Nothing else in scope</span>
+            </div>
+          )}
+        </div>
+      )}
       {bubble && (
         <div
           ref={bubbleRef}

@@ -13,6 +13,10 @@
   --accent: #0099ff;
   --accent-soft: rgba(0, 153, 255, 0.16);
   --green: #30c158;
+  /* Components read in this green everywhere: Navigator rows, the canvas
+     outline, and the "inside a component" back button. */
+  --component-green: #79e09c;
+  --component-green-soft: rgba(121, 224, 156, 0.16);
   --red: #ff453a;
   --amber: #ffd60a;
   --radius: 8px;
@@ -141,6 +145,27 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   max-width: 220px;
 }
 .page-switch-btn:hover:not(:disabled) { background: var(--bg-hover); }
+/* Editing a component: the switcher becomes a way back out, in the same
+   green the navigator and canvas use for components. */
+/* Same green as a selected component row in the Navigator, so "inside a
+   component" reads as one colour across the app. */
+.page-switch-btn.comp-back {
+  background: var(--component-green-soft);
+  color: var(--component-green);
+  gap: 8px;
+}
+.page-switch-btn.comp-back:hover:not(:disabled) { background: rgba(121, 224, 156, 0.26); }
+/* Both selectors: the generic `.page-switch-btn svg:first-child` rule below
+   ties on specificity and would otherwise grey out the back arrow. */
+.page-switch-btn.comp-back svg,
+.page-switch-btn.comp-back svg:first-child { color: var(--component-green); }
+.comp-back-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 0;
+  background: rgba(121, 224, 156, 0.35);
+  flex-shrink: 0;
+}
 .page-switch-btn svg:first-child { color: var(--text-dim); }
 .page-switch-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .page-switch-chevron { color: var(--text-faint); }
@@ -203,7 +228,10 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   font-size: 11.5px;
 }
 
-.preview-btn {
+/* Preview + open-in-browser sit together as one cluster. */
+.titlebar-actions { display: flex; align-items: center; gap: 2px; }
+
+.titlebar-btn {
   width: 30px;
   height: 28px;
   padding: 0;
@@ -211,7 +239,8 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   color: var(--text-dim);
   border-radius: 8px;
 }
-.preview-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.titlebar-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.titlebar-btn:disabled { opacity: 0.4; }
 .preview-btn.on { background: var(--accent); color: white; }
 .preview-btn.on:hover:not(:disabled) { background: #24a8ff; }
 
@@ -384,6 +413,26 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
 .style-editor:focus-within { border-color: var(--accent); }
 .style-editor .cm-content { padding: 6px 8px; }
 .style-editor .cm-line { padding: 0; }
+
+/* Highlighted JS in an input's clothing (loop data, code preview). */
+.expr-input {
+  width: 100%;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  max-height: 200px;
+  overflow: auto;
+  transition: border-color 0.1s, background 0.1s;
+}
+.expr-input:hover { background: rgba(255, 255, 255, 0.08); }
+.expr-input:focus-within { border-color: var(--accent); background: var(--bg-input); }
+.expr-input.invalid { border-color: var(--red); }
+.expr-input .cm-content { padding: 6px 8px; }
+.expr-input .cm-line { padding: 0; }
+.expr-input .cm-editor { background: transparent; }
+/* The placeholder should read like an input's, not like code. */
+.expr-input .cm-placeholder { color: var(--text-faint); font-family: var(--font); }
 
 /* Insert palette (⌘F / ⌘E) */
 .insert-overlay {
@@ -588,6 +637,13 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
+}
+/* Font files preview as "Aa" set in the font itself. */
+.asset-font {
+  font-size: 38px;
+  line-height: 1;
+  color: var(--text);
+  user-select: none;
 }
 .asset-name {
   margin-top: 5px;
@@ -943,6 +999,62 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
 }
 
 /* Palette */
+/* {expression} chips in the content editor — the same purple the navigator
+   uses for loops, so a value coming from a loop reads as one. */
+.expr-chip {
+  display: inline-block;
+  padding: 0 5px;
+  margin: 0 1px;
+  border-radius: 4px;
+  background: rgba(146, 116, 255, 0.28);
+  color: #c4afff;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.expr-chip:hover { background: rgba(146, 116, 255, 0.42); color: #ddd0ff; }
+.expr-menu { max-height: 260px; overflow-y: auto; }
+/* This menu drives selection on click, not on hover like Dropdown does, so
+   the hover feedback is plain CSS — matching .highlight so the two read the
+   same wherever you see them. */
+.expr-menu .dd-option:hover { background: var(--accent); color: white; }
+.expr-menu .dd-option:hover .dd-hint { color: rgba(255, 255, 255, 0.8); }
+.expr-menu .dd-option:hover .dd-check { color: white; }
+.expr-menu .dd-check { color: var(--accent); }
+
+/* Loop data source: a purple tag once a source is chosen, matching the
+   purple the navigator already uses for loops. Plain while it's None, so an
+   unset loop doesn't read as configured. */
+.dd-trigger.dd-source.on {
+  background: rgba(146, 116, 255, 0.22);
+  border-color: rgba(146, 116, 255, 0.45);
+}
+.dd-trigger.dd-source.on .dd-label { color: #c4afff; font-weight: 600; }
+.dd-trigger.dd-source.on .dd-chevron { color: #c4afff; }
+.dd-trigger.dd-source.on:hover { background: rgba(146, 116, 255, 0.3); }
+
+/* Assets panel while a field is waiting for a pick. */
+.asset-picking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 6px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  border: 1px solid rgba(0, 153, 255, 0.35);
+  font-size: 11.5px;
+  color: var(--text);
+}
+.asset-picking span { flex: 1; }
+.asset-picking button { padding: 2px 8px; font-size: 11px; }
+.asset-tile.pickable { cursor: pointer; border-radius: 8px; }
+.asset-tile.pickable:hover { background: var(--bg-hover); }
+.asset-tile.selected { background: var(--accent-soft); }
+
 /* Folder heading in the components list (layouts, component subfolders). */
 .palette-folder {
   padding: 10px 8px 4px;
@@ -1079,12 +1191,12 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
 /* Component instances — Webflow-style green */
 .structure-node.is-component,
 .structure-node.is-component:hover,
-.structure-node.is-component.selected { color: #79e09c; }
+.structure-node.is-component.selected { color: var(--component-green); }
 .structure-node.is-component .icon,
 .structure-node.is-component:hover .icon,
-.structure-node.is-component.selected .icon { color: #79e09c; }
+.structure-node.is-component.selected .icon { color: var(--component-green); }
 .structure-node.is-component:hover { background: var(--bg-active); }
-.structure-node.is-component.selected { background: rgba(121, 224, 156, 0.16); }
+.structure-node.is-component.selected { background: var(--component-green-soft); }
 
 /* Drop gaps between navigator rows. Where a deep subtree ends, the trailing
    gaps of every ancestor level are adjacent in the DOM — collapse all but
@@ -1702,6 +1814,60 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
 .git-chip:hover { background: var(--bg-active); color: var(--text); }
 .git-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 .git-chip .dot.dirty { background: var(--amber); }
+/* While an action runs the chip states it, so there's feedback even with the
+   dropdown closed (publishing can take a while). */
+.git-chip.busy { color: var(--text); }
+
+.mini-spinner {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* Remote shown as owner/repo rather than a raw URL, and clickable. */
+.repo-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: var(--bg-input);
+  color: var(--text-dim);
+}
+.repo-link:hover { color: var(--text); }
+.repo-link .repo-slug {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint-text {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+.hint-text code,
+.modal .error-text code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.publish-progress,
+.publish-done {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.publish-done { color: var(--green); }
 
 .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.on { background: var(--green); box-shadow: 0 0 6px rgba(48, 193, 88, 0.6); }
@@ -2134,6 +2300,18 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
 }
 .class-suggest { z-index: 500; }
 
+/* Component edit mode: a cutout that dims the whole canvas except the
+   instance being edited. The huge spread paints everything around the rect;
+   the rect itself stays clear. */
+.node-focus {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55);
+  outline: 1px solid var(--green);
+  outline-offset: -1px;
+}
+
 /* ------------------------------------------------------------------ */
 /* Canvas node outlines — overlaid on the preview, never in the page   */
 /* ------------------------------------------------------------------ */
@@ -2146,13 +2324,16 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   outline-offset: -1px;
 }
 .node-outline.component { outline-color: var(--green); }
-.node-outline.map { outline-color: #8b5cf6; }
+/* Data-bound elements read as dynamic, same as loops. */
+.node-outline.map,
+.node-outline.bound { outline-color: #8b5cf6; }
 /* Selected: transparent inside, solid name chip above. */
 .node-outline.sel { outline-width: 2px; }
-/* Hover: bare colored label above (no chip). Only components and loops get a
-   translucent fill — plain elements stay clear so their content reads. */
+/* Hover: bare colored label above (no chip). Only components get a
+   translucent fill — plain elements stay clear so their content reads, and a
+   loop covers so much of the page that tinting it washes out everything
+   inside. */
 .node-outline.hover.component { background: rgba(48, 193, 88, 0.14); }
-.node-outline.hover.map { background: rgba(139, 92, 246, 0.14); }
 .node-outline-tag {
   position: absolute;
   top: 0;
@@ -2171,7 +2352,8 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   white-space: nowrap;
 }
 .node-outline.component .node-outline-tag { background: var(--green); }
-.node-outline.map .node-outline-tag { background: #8b5cf6; }
+.node-outline.map .node-outline-tag,
+.node-outline.bound .node-outline-tag { background: #8b5cf6; }
 .node-outline-tag.inside {
   transform: none;
   border-radius: 0 0 4px 0;
@@ -2182,4 +2364,5 @@ textarea { font-family: inherit; font-size: 12px; line-height: 1.5; resize: none
   padding-left: 0;
 }
 .node-outline.hover.component .node-outline-tag { color: var(--green); }
-.node-outline.hover.map .node-outline-tag { color: #a78bfa; }
+.node-outline.hover.map .node-outline-tag,
+.node-outline.hover.bound .node-outline-tag { color: #a78bfa; }

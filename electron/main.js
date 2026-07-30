@@ -72,8 +72,19 @@ function registerAssetProtocol() {
     if (!openProjectRoot || !(abs + path.sep).startsWith(openProjectRoot + path.sep)) {
       return new Response(null, { status: 403 });
     }
-    return enet.fetch(pathToFileURL(abs).toString(), { headers: request.headers });
+    return serveFile(abs, request);
   });
+}
+
+async function serveFile(abs, request) {
+  const res = await enet.fetch(pathToFileURL(abs).toString(), { headers: request.headers });
+  // The renderer is a different origin from this scheme, and font loading is
+  // CORS-checked (unlike <img>/<video>), so the Assets panel's "Aa" preview
+  // needs this to fetch the face at all. Reach is already limited to the open
+  // project by the check above.
+  const headers = new Headers(res.headers);
+  headers.set('Access-Control-Allow-Origin', '*');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +547,10 @@ function nodeCliCommand(binPath, args) {
 }
 
 function run(cmd, args, cwd, opts = {}) {
+  // Launched from Finder, the packaged app inherits a bare PATH — Homebrew's
+  // bin isn't on it, so `gh` looks uninstalled however it was set up. Cheap
+  // after the first call (memoized).
+  ensureToolPath();
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { cwd, timeout: opts.timeout || 60000, ...opts }, (err, stdout, stderr) => {
       if (err) {
@@ -2069,15 +2084,46 @@ ipcMain.handle('git:info', async (_e, projectPath) => {
   } catch {
     /* ignore */
   }
+  // Without an upstream there's no count to give — and "0 ahead" would read
+  // as "nothing to push" when in fact the branch has never been pushed at
+  // all, so the two cases have to stay distinguishable.
   try {
-    const counts = (
-      await git(projectPath, ['rev-list', '--count', '--left-only', 'HEAD...@{upstream}'])
-    ).stdout.trim();
-    info.ahead = parseInt(counts, 10) || 0;
+    await git(projectPath, ['rev-parse', '--abbrev-ref', '@{upstream}']);
+    info.hasUpstream = true;
   } catch {
-    info.ahead = 0;
+    info.hasUpstream = false;
+  }
+  if (info.hasUpstream) {
+    try {
+      const counts = (
+        await git(projectPath, ['rev-list', '--count', '--left-only', 'HEAD...@{upstream}'])
+      ).stdout.trim();
+      info.ahead = parseInt(counts, 10) || 0;
+    } catch {
+      info.ahead = 0;
+    }
   }
   return info;
+});
+
+// Is the GitHub CLI usable? Checked when the publish dialog opens so a
+// missing or logged-out `gh` is stated up front, instead of surfacing as a
+// failure after the user has filled the form in.
+ipcMain.handle('git:ghStatus', async (_e, projectPath) => {
+  try {
+    await run('gh', ['--version'], projectPath);
+  } catch {
+    return { installed: false, authed: false };
+  }
+  try {
+    // Writes its report to stderr and exits non-zero when logged out.
+    const r = await run('gh', ['auth', 'status'], projectPath);
+    const out = `${r.stdout}${r.stderr}`;
+    const m = out.match(/(?:account|as)\s+([\w-]+)/i);
+    return { installed: true, authed: true, user: m ? m[1] : null };
+  } catch {
+    return { installed: true, authed: false };
+  }
 });
 
 ipcMain.handle('git:init', async (_e, projectPath) => {
@@ -2120,7 +2166,18 @@ ipcMain.handle('git:publish', async (_e, { projectPath, repoName, isPrivate }) =
     '--push',
   ];
   const result = await run('gh', args, projectPath, { timeout: 180000 });
-  return { ok: true, output: result.stdout + result.stderr };
+  const output = result.stdout + result.stderr;
+  // gh prints the new repo's URL; fall back to the remote it just set.
+  let url = (output.match(/https:\/\/github\.com\/[^\s"']+/) || [])[0] || null;
+  if (!url) {
+    try {
+      url = (await git(projectPath, ['remote', 'get-url', 'origin'])).stdout.trim() || null;
+    } catch {
+      /* no remote — caller just won't get a link */
+    }
+  }
+  if (url) url = url.replace(/[.,)]+$/, '').replace(/\.git$/, '');
+  return { ok: true, url, output };
 });
 
 ipcMain.handle('shell:openExternal', async (_e, url) => {

@@ -63,6 +63,12 @@ export const TagIcon = (p) => (
   </I>
 );
 
+export const ChevronLeftIcon = (p) => (
+  <I {...p}>
+    <path d="m10 4-4 4 4 4" />
+  </I>
+);
+
 export const ChevronRightIcon = (p) => (
   <I {...p}>
     <path d="m6 4 4 4-4 4" />

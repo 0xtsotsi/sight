@@ -12,9 +12,28 @@ import AssetThumb, { TEXT_EXT } from '../ui/AssetThumb.jsx';
 
 const parentOf = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
 
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|svg|ico|bmp)$/i;
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v|ogv|ogg)$/i;
+const AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac|oga)$/i;
+const kindMatches = (kind, name) => {
+  if (kind === 'image') return IMAGE_EXT.test(name);
+  if (kind === 'video') return VIDEO_EXT.test(name);
+  if (kind === 'audio') return AUDIO_EXT.test(name);
+  return true;
+};
+const pickPrompt = {
+  image: 'Choose an image',
+  video: 'Choose a video',
+  audio: 'Choose an audio file',
+  asset: 'Choose a file',
+};
+
 // Assets panel: browses public/, uploads, drag-in/out of folders, renames.
 // External changes to public/ refresh the listing via the fs watcher.
-export default function AssetsPanel({ project, showToast, onOpenFile }) {
+// `pick` is set while a field is waiting for an asset (see assetPick.js):
+// the panel filters to the kind that was asked for, starts in the folder the
+// current value lives in, and a click assigns instead of opening the file.
+export default function AssetsPanel({ project, showToast, onOpenFile, pick, onPickCancel }) {
   const [entries, setEntries] = useState([]);
   const [missing, setMissing] = useState(false);
   const [cwd, setCwd] = useState('');
@@ -40,8 +59,20 @@ export default function AssetsPanel({ project, showToast, onOpenFile }) {
     return off;
   }, [refresh]);
 
+  // Open a pick in the folder the current value lives in, so replacing an
+  // asset doesn't start over at the root. Keyed on the request itself: while
+  // one is open the user is free to browse elsewhere.
+  const pickKey = pick ? `${pick.mediaKind}:${pick.current || ''}` : null;
+  useEffect(() => {
+    if (!pick) return;
+    setCwd(pick.current?.includes('/') ? parentOf(pick.current) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickKey]);
+
   const folders = entries.filter((e) => e.isDir && e.parent === cwd);
-  const files = entries.filter((e) => !e.isDir && e.parent === cwd);
+  const files = entries
+    .filter((e) => !e.isDir && e.parent === cwd)
+    .filter((e) => !pick || kindMatches(pick.mediaKind, e.name));
 
   const act = async (fn) => {
     try {
@@ -166,6 +197,15 @@ export default function AssetsPanel({ project, showToast, onOpenFile }) {
         </div>
       </div>
 
+      {pick && (
+        <div className="asset-picking">
+          <span>{pickPrompt[pick.mediaKind] || pickPrompt.asset}</span>
+          <button className="ghost" onClick={onPickCancel}>
+            Cancel
+          </button>
+        </div>
+      )}
+
       <div className="asset-crumbs">
         {crumbs.map((c, i) => (
           <React.Fragment key={c.rel}>
@@ -257,18 +297,31 @@ export default function AssetsPanel({ project, showToast, onOpenFile }) {
             return (
             <div
               key={file.rel}
-              className="asset-tile"
+              className={`asset-tile ${pick ? 'pickable' : ''} ${
+                pick && pick.current === file.rel ? 'selected' : ''
+              }`}
               draggable={renaming !== file.rel}
               onDragStart={(e) => {
                 e.dataTransfer.setData('avb/asset', file.rel);
                 e.dataTransfer.effectAllowed = 'move';
               }}
-              title={editable ? `/${file.rel} — click to edit` : `/${file.rel}`}
+              title={
+                pick
+                  ? `Use /${file.rel}`
+                  : editable
+                    ? `/${file.rel} — click to edit`
+                    : `/${file.rel}`
+              }
+              // While picking, the whole tile assigns — including for text
+              // files, whose thumb would otherwise open the code editor.
+              onClick={pick ? () => pick.onPick(file.rel) : undefined}
             >
               <AssetThumb
                 file={file}
-                className={editable ? 'editable' : ''}
-                onClick={() => editable && onOpenFile?.({ rel: file.rel, name: file.name })}
+                className={editable && !pick ? 'editable' : ''}
+                onClick={() =>
+                  !pick && editable && onOpenFile?.({ rel: file.rel, name: file.name })
+                }
               />
               {renaming === file.rel ? (
                 <RenameInput entry={file} onCommit={commitRename} />

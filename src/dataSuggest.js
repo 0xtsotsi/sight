@@ -156,6 +156,18 @@ function kindOf(value) {
 
 const MAP_HEAD_RE = /^([\s\S]+?)\.map\(\s*\(\s*([\w$]+)\s*(?:,\s*([\w$]+)\s*)?\)\s*=>\s*\($/;
 
+// Modules that can't be looped over, by what they are rather than by naming
+// luck: markup, styles, and media. A PascalCase default import is Astro's
+// component convention, which catches the rest.
+const NON_DATA_EXT =
+  /\.(astro|md|mdx|css|s[ac]ss|less|svg|png|jpe?g|gif|webp|avif|ico|bmp|mp4|webm|mov|woff2?|ttf|otf)(\?.*)?$/i;
+
+function mayHoldData(imp) {
+  const path = String(imp?.path || '');
+  if (NON_DATA_EXT.test(path)) return false;
+  return !/^[A-Z]/.test(String(imp?.name || ''));
+}
+
 // Follow a dotted path (['services'] or ['service','tags']) through value
 // texts; stepping into an array uses its first object's shape.
 function resolvePath(rootValue, parts) {
@@ -202,7 +214,10 @@ export function dataSuggestions(context, query) {
 
   for (const [name, value] of decls) addListPaths(name, value, 0);
   for (const imp of context.imports || []) {
-    if (!decls.has(imp.name)) push(imp.name, 'import'); // shape unknown — may be a list
+    // An import's shape is unknown, so it may be a list — but a component,
+    // layout, stylesheet or image never is, and those are the bulk of what a
+    // page imports. Offering `Heading` as something to loop over is noise.
+    if (!decls.has(imp.name) && mayHoldData(imp)) push(imp.name, 'import');
   }
   for (const head of context.ancestorHeads || []) {
     const m = String(head).trim().match(MAP_HEAD_RE);
@@ -228,4 +243,54 @@ export function dataSuggestions(context, query) {
       const bp = b.insert.toLowerCase().startsWith(q) ? 0 : 1;
       return ap - bp || a.insert.length - b.insert.length;
     });
+}
+
+// Values that can go inside {} at the current selection: the item and index
+// of every enclosing loop, the fields of those items when the data's shape is
+// readable, and top-level frontmatter values that aren't lists. Used by the
+// content editor's expression chips. Same context shape as dataSuggestions.
+export function exprSuggestions(context) {
+  const decls = parseDeclarations(context.frontmatter || '');
+  const out = [];
+  const seen = new Set();
+  const push = (insert, hint) => {
+    if (insert && !seen.has(insert)) {
+      seen.add(insert);
+      out.push({ insert, hint });
+    }
+  };
+
+  // The object shape one element of `dataExpr` has, when it can be read.
+  const shapeOf = (dataExpr) => {
+    if (!/^[\w$.]+$/.test(dataExpr)) return null;
+    const [first, ...rest] = dataExpr.split('.');
+    const rootVal = decls.get(first);
+    if (!rootVal) return null;
+    const v = rest.length ? resolvePath(rootVal, rest) : rootVal;
+    return v ? firstObjectIn(v) : null;
+  };
+
+  for (const head of context.ancestorHeads || []) {
+    const m = String(head).trim().match(MAP_HEAD_RE);
+    if (!m) continue;
+    const item = m[2];
+    const index = m[3];
+    const shape = shapeOf(m[1].trim());
+    if (shape) {
+      // A bare `{service}` would print [object Object] — offer its fields.
+      for (const e of objectEntries(shape)) push(`${item}.${e.key}`, kindOf(e.value) || 'field');
+    } else {
+      push(item, 'loop item'); // shape unknown (a list of strings, an import…)
+    }
+    if (index) push(index, 'number');
+  }
+
+  for (const [name, value] of decls) {
+    const k = kindOf(value);
+    if (k === 'text' || k === 'number' || k === 'boolean') push(name, k);
+    else if (k === 'object') {
+      for (const e of objectEntries(value)) push(`${name}.${e.key}`, kindOf(e.value) || 'field');
+    }
+  }
+  return out;
 }

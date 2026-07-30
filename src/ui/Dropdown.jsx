@@ -10,7 +10,17 @@ import { ChevronDownIcon, CheckIcon } from './Icons.jsx';
 // The popup renders position:fixed so it can escape scrolling panels, flips
 // upward when there's no room below, and closes on outside click, Escape,
 // or any scroll outside the popup.
-export default function Dropdown({ value, options, onChange, className, placeholder }) {
+// `livePreview={false}` turns the hover/arrow preview off, for values where
+// applying one costs more than a repaint — a loop's data source rewrites the
+// page's code, so skimming the list would churn through every option.
+export default function Dropdown({
+  value,
+  options,
+  onChange,
+  className,
+  placeholder,
+  livePreview = true,
+}) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
   const [pos, setPos] = useState(null); // {left, top, bottom, width}
@@ -41,7 +51,7 @@ export default function Dropdown({ value, options, onChange, className, placehol
   const previewOption = (i) => {
     setHighlight(i);
     const o = options[i];
-    if (!o) return;
+    if (!o || !livePreview) return;
     const applied = previewedRef.current ?? committedRef.current;
     if (o.value !== applied) {
       previewedRef.current = o.value;

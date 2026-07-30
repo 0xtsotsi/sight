@@ -330,6 +330,18 @@ function parsePage(source) {
   }
   if (wrapper) wrapper.id = 'layout';
 
+  // A capitalized tag that isn't imported is a dynamic tag, not a component:
+  // `const Tag = tag` then `<Tag>` is how an Astro component renders a
+  // caller-chosen element. Flag those so the UI treats them as elements —
+  // they have no file to open and no props of their own.
+  const markDynamic = (list) => {
+    for (const n of list) {
+      if (n.kind === 'component' && !importsByName[n.name]) n.dynamicTag = true;
+      if (Array.isArray(n.children)) markDynamic(n.children);
+    }
+  };
+  markDynamic(topNodes);
+
   return { editable: true, model: { imports, extraFrontmatter, nodes: topNodes } };
 }
 

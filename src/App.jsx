@@ -12,7 +12,15 @@ import PageSwitcher from './ui/PageSwitcher.jsx';
 import InsertSearch from './ui/InsertSearch.jsx';
 import AssetsPanel from './panels/AssetsPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
-import { PreviewIcon, RefreshIcon, ExternalIcon } from './ui/Icons.jsx';
+import { onAssetRequest, clearAssetRequest } from './assetPick.js';
+import { isDataBound } from './bindings.js';
+import {
+  PreviewIcon,
+  RefreshIcon,
+  ExternalIcon,
+  ChevronLeftIcon,
+  ElementComponentIcon,
+} from './ui/Icons.jsx';
 
 let idCounter = 1000;
 const newId = () => `c${idCounter++}`;
@@ -114,6 +122,60 @@ function nodeAtPath(nodes, trail) {
   return node;
 }
 
+// ---------------------------------------------------------------------------
+// Renaming a loop variable
+//
+// `services.map((service) => …)` — renaming `service` has to follow every
+// reference below it, or the loop's own children stop compiling. Text-level
+// rewriting, since the children hold code as strings.
+// ---------------------------------------------------------------------------
+
+const MAP_HEAD_RE = /^([\s\S]+?)\.map\(\s*\(\s*([\w$]+)\s*(?:,\s*([\w$]+)\s*)?\)\s*=>\s*\($/;
+
+function splitMapHead(head) {
+  const m = String(head).trim().match(MAP_HEAD_RE);
+  return m ? { data: m[1].trim(), item: m[2], index: m[3] || '' } : null;
+}
+
+// Whole identifier only: `service` but never the `service` in `x.service`
+// (a property of something else) or in `services`.
+const renameIdent = (code, from, to) =>
+  String(code ?? '').replace(new RegExp(`(?<![.\\w$])${from}(?![\\w$])`, 'g'), to);
+
+// Text nodes are prose with {expressions} in it — rewrite only the braces,
+// so a loop variable named `title` doesn't rewrite the word in a sentence.
+const renameInBraces = (text, from, to) =>
+  String(text ?? '').replace(/\{([^{}]*)\}/g, (_, inner) => `{${renameIdent(inner, from, to)}}`);
+
+function renameLoopVar(nodes, from, to) {
+  for (const n of nodes) {
+    if (n.kind === 'map') {
+      const p = splitMapHead(n.head);
+      if (p) {
+        // Only the data expression is a reference; the parameters are this
+        // loop's own declarations.
+        const data = renameIdent(p.data, from, to);
+        if (data !== p.data) {
+          n.head = `${data}.map((${p.item}${p.index ? `, ${p.index}` : ''}) => (`;
+        }
+        // A nested loop that re-declares the name shadows the outer one, so
+        // everything below it means something else by it.
+        if (p.item === from || p.index === from) continue;
+      } else {
+        n.head = renameIdent(n.head, from, to); // custom head — best effort
+      }
+    } else if (n.kind === 'expr') {
+      n.value = renameIdent(n.value, from, to);
+    } else if (n.kind === 'text') {
+      n.value = renameInBraces(n.value, from, to);
+    }
+    for (const [key, v] of Object.entries(n.props || {})) {
+      if (v?.type === 'expr') n.props[key] = { ...v, value: renameIdent(v.value, from, to) };
+    }
+    if (Array.isArray(n.children)) renameLoopVar(n.children, from, to);
+  }
+}
+
 function collectUsedNames(model) {
   const used = new Set();
   const walk = (list) => {
@@ -150,11 +212,131 @@ function chooseImportPath(model, { relative, srcRelative }) {
   return relative;
 }
 
+// `data.map((item[, index]) => (` → its pieces, or null when the head is
+// hand-written code the loop editor can't model.
+function parseLoopHead(head) {
+  const m = String(head || '').match(
+    /^([\s\S]*?)\.map\(\s*\(\s*([A-Za-z_$][\w$]*)\s*(?:,\s*([A-Za-z_$][\w$]*)\s*)?\)\s*=>\s*\($/
+  );
+  return m ? { data: m[1].trim(), item: m[2], index: m[3] || '' } : null;
+}
+
+// Whether `expr` reads from the variable `v` (`service`, `service.tags`) —
+// not merely contains its letters (`services`, `x.service`).
+const readsVar = (expr, v) =>
+  new RegExp(`(^|[^\\w$.])${v}\\b`).test(String(expr || ''));
+
+// Switching a loop's data source orphans any loop beneath it that reads from
+// the item — `service.tags.map(...)` under `services.map((service) => …)`
+// would call .map on undefined once the parent points somewhere else. Those
+// loops are repointed at an empty array: still valid code, renders nothing,
+// and the child markup is preserved for re-pointing by hand.
+function disconnectDependentLoops(list, vars) {
+  for (const n of list || []) {
+    if (!Array.isArray(n.children)) continue;
+    if (n.kind === 'map') {
+      const h = parseLoopHead(n.head);
+      if (h && vars.some((v) => readsVar(h.data, v))) {
+        n.head = `[].map((${h.item}${h.index ? `, ${h.index}` : ''}) => (`;
+      }
+      // A nested loop that reuses the name shadows it, so anything deeper
+      // refers to the inner one and is still valid.
+      const shadowed = new Set([h?.item, h?.index].filter(Boolean));
+      const rest = vars.filter((v) => !shadowed.has(v));
+      if (rest.length) disconnectDependentLoops(n.children, rest);
+    } else {
+      disconnectDependentLoops(n.children, vars);
+    }
+  }
+}
+
+// The loop variables in scope at a node: every enclosing map's item/index.
+function loopVarsAt(nodes, id) {
+  const vars = [];
+  const walk = (list, scope) => {
+    for (const n of list) {
+      if (n.id === id) {
+        vars.push(...scope);
+        return true;
+      }
+      if (Array.isArray(n.children)) {
+        const next =
+          n.kind === 'map'
+            ? [...scope, ...[parseLoopHead(n.head)?.item, parseLoopHead(n.head)?.index].filter(Boolean)]
+            : scope;
+        if (walk(n.children, next)) return true;
+      }
+    }
+    return false;
+  };
+  walk(nodes, []);
+  return [...new Set(vars)];
+}
+
+// What a dropped binding is replaced with, so the element keeps rendering
+// something you can select and retype.
+const UNBOUND_TEXT = 'content';
+
+// Moving or pasting a node out of its loop leaves its bindings pointing at a
+// variable that no longer exists — `{service.text}` becomes a hard
+// ReferenceError that blanks the whole page. Replace exactly those bindings:
+// `{…}` children and interpolations become placeholder text, expression props
+// are dropped (a stale `href="content"` would just be a broken link), and
+// nested loops that read from the departed item are pointed at an empty
+// array.
+function stripLostBindings(node, vars) {
+  if (!vars.length) return 0;
+  let removed = 0;
+  const walk = (n) => {
+    for (const [k, v] of Object.entries(n.props || {})) {
+      if (v?.type === 'expr' && vars.some((x) => readsVar(v.value, x))) {
+        delete n.props[k];
+        removed++;
+      }
+    }
+    // A dropped binding leaves placeholder text rather than a hole, so the
+    // element stays visible and editable on the canvas.
+    if (n.kind === 'expr' && vars.some((x) => readsVar(n.value, x))) {
+      removed++;
+      n.kind = 'text';
+      n.value = UNBOUND_TEXT;
+      delete n.head;
+      delete n.children;
+      return;
+    }
+    if (n.kind === 'text' && n.value.includes('{')) {
+      const next = n.value.replace(/\{([^{}]*)\}/g, (whole, inner) =>
+        vars.some((x) => readsVar(inner, x)) ? UNBOUND_TEXT : whole
+      );
+      if (next !== n.value) {
+        removed++;
+        n.value = next;
+      }
+    }
+    if (n.kind === 'map') {
+      const h = parseLoopHead(n.head);
+      if (h && vars.some((x) => readsVar(h.data, x))) {
+        n.head = `[].map((${h.item}${h.index ? `, ${h.index}` : ''}) => (`;
+        removed++;
+      }
+    }
+    if (Array.isArray(n.children)) {
+      n.children.forEach(walk);
+      n.children = n.children.filter((c) => !c.__drop);
+    }
+  };
+  walk(node);
+  return removed;
+}
+
 export default function App() {
   const [project, setProject] = useState(null); // {path, name}
   const [scan, setScan] = useState({ pages: [], layouts: [], components: [] });
   const [projectClasses, setProjectClasses] = useState([]);
-  const [currentPage, setCurrentPage] = useState(null); // {path, name, route}
+  const [currentPage, setCurrentPage] = useState(null); // active file {path, name, route?, kind}
+  // Drill-down trail: [page, component, nested component, …]. The last entry
+  // is what's on screen; anything before it is what Back/Escape returns to.
+  const [editStack, setEditStack] = useState([]);
   const [pageState, setPageState] = useState(null); // {editable, model, source, reason}
   const [selectedId, setSelectedId] = useState(null);
   const [hoverNodeId, setHoverNodeId] = useState(null); // navigator row hover
@@ -169,6 +351,7 @@ export default function App() {
   const [inPreview, setInPreview] = useState(false); // interactive full-site preview
   const [previewSrc, setPreviewSrc] = useState(null);
   const [codeWin, setCodeWin] = useState(null); // {targetId|kind:'file', title, language}
+  const openCodeWindowRef = useRef(null); // latest openCodeWindow, for the Enter shortcut
   const [fileText, setFileText] = useState(''); // loaded text for kind:'file'
   // Breakpoint lives here, not in PreviewPane: a re-mount of that pane must
   // not silently drop the user out of the view they picked (which would
@@ -178,6 +361,11 @@ export default function App() {
   // scrolls the row into view — a counter, not the id, so clicking the same
   // element twice still reveals it.
   const [revealTick, setRevealTick] = useState(0);
+  // The asset request a field is waiting on, and the tab to go back to once
+  // it's answered — "Choose Image…" borrows the left panel rather than
+  // opening a window over the canvas.
+  const [assetPick, setAssetPick] = useState(null);
+  const tabBeforePick = useRef(null);
 
   // A layout is just a component that lives in src/layouts — it can be
   // placed on a page like any other. Every lookup that answers "what do we
@@ -195,6 +383,8 @@ export default function App() {
   pageStateRef.current = { currentPage, pageState };
   const selectedIdRef = useRef(null);
   selectedIdRef.current = selectedId;
+  const editStackRef = useRef([]);
+  editStackRef.current = editStack;
   const inPreviewRef = useRef(false);
   inPreviewRef.current = inPreview;
   const previewPathRef = useRef(null);
@@ -216,6 +406,32 @@ export default function App() {
       .then((d) => setDevDiag(d))
       .catch(() => setDevDiag(null));
   }, []);
+
+  const endAssetPick = useCallback(() => {
+    clearAssetRequest();
+    setAssetPick(null);
+    // Back to whatever was open before, so answering a field doesn't leave
+    // the user parked in the asset browser.
+    setLeftTab((t) => (t === 'assets' && tabBeforePick.current ? tabBeforePick.current : t));
+    tabBeforePick.current = null;
+  }, []);
+
+  useEffect(() => {
+    return onAssetRequest((req) => {
+      if (!req) return; // cleared from this side already
+      setAssetPick({
+        ...req,
+        onPick: (rel) => {
+          req.onPick(rel);
+          endAssetPick();
+        },
+      });
+      setLeftTab((t) => {
+        if (t !== 'assets') tabBeforePick.current = t;
+        return 'assets';
+      });
+    });
+  }, [endAssetPick]);
 
   const showToast = useCallback((msg, kind = 'info') => {
     setToast({ msg, kind });
@@ -332,17 +548,65 @@ export default function App() {
     setPageState((s) => (s ? { ...s, dirty: false } : s));
   }, []);
 
-  const selectPage = useCallback(
-    async (page) => {
+  // Opens any .astro file for editing — a page, or a component drilled into.
+  // `currentPage` is simply whatever is being edited, so saving, undo, the
+  // navigator, and the props panel all follow without special cases.
+  const openFile = useCallback(
+    async (entry) => {
       await flushSave();
-      setCurrentPage(page);
+      setCurrentPage(entry);
       setSelectedId(null);
-      const result = await window.avb.readPage(page.path);
+      const result = await window.avb.readPage(entry.path);
       setPageState({ ...result, dirty: false });
       historyRef.current = { past: [], future: [], lastPush: 0, lastKey: null };
     },
     [flushSave]
   );
+
+  const selectPage = useCallback(
+    async (page) => {
+      // Opening a page from the switcher leaves any component drill-down.
+      setEditStack([{ ...page, kind: 'page' }]);
+      await openFile({ ...page, kind: 'page' });
+    },
+    [openFile]
+  );
+
+  // Drill into a component: its own file becomes the edited document, and the
+  // stack remembers what to come back to (pages and components alike, so
+  // nesting works to any depth).
+  const openComponent = useCallback(
+    async (name, hostPath) => {
+      const comp =
+        scan.components.find((c) => c.name === name) ||
+        scan.layouts.find((l) => l.name === name);
+      if (!comp) {
+        showToast(`Can't find a file for <${name}>.`, 'error');
+        return;
+      }
+      const stack = editStackRef.current;
+      // The canvas keeps showing the page, so remember which instance was
+      // opened — that region stays lit while the rest dims. Drilling deeper
+      // keeps the outermost instance as the focus: a nested component's
+      // internals aren't addressable in the page's own markers.
+      const focusPath = stack[stack.length - 1]?.focusPath ?? hostPath ?? null;
+      const entry = { kind: 'component', name: comp.name, path: comp.path, focusPath };
+      setEditStack((s) =>
+        s.some((e) => e.path === comp.path) ? s : [...s, entry]
+      );
+      await openFile(entry);
+    },
+    [scan.components, scan.layouts, openFile, showToast]
+  );
+
+  // Back out one level: to the parent component if nested, else to the page.
+  const closeComponent = useCallback(async () => {
+    const stack = editStackRef.current;
+    if (stack.length < 2) return;
+    const next = stack.slice(0, -1);
+    setEditStack(next);
+    await openFile(next[next.length - 1]);
+  }, [openFile]);
 
   // ----------------------------------------------------------------
   // Undo / redo — per-page history of model (or source) snapshots.
@@ -570,14 +834,27 @@ export default function App() {
           (target?.parentId != null &&
             findNodeById(model.nodes, target.parentId)?.children === found.list);
 
+        const before = loopVarsAt(model.nodes, nodeId);
+
         found.list.splice(found.index, 1);
         let index = target?.index ?? Number.MAX_SAFE_INTEGER;
         if (sameList && index > found.index) index -= 1;
         insertIntoModel(model, node, target ? { ...target, index } : null);
+
+        // Left a loop? Anything still reading its item would throw.
+        const after = loopVarsAt(model.nodes, nodeId);
+        const lost = before.filter((v) => !after.includes(v));
+        const removed = stripLostBindings(node, lost);
+        if (removed) {
+          showToast(
+            `Removed ${removed} binding${removed === 1 ? '' : 's'} that referenced ${lost.join(', ')}.`,
+            'info'
+          );
+        }
         return model;
       }, true);
     },
-    [mutateModel]
+    [mutateModel, showToast]
   );
 
   const removeNode = useCallback(
@@ -621,7 +898,12 @@ export default function App() {
       if (!state?.editable) return;
       const node = findNodeById(state.model.nodes, nodeId);
       if (!node) return;
-      nodeClipboardRef.current = structuredClone(node);
+      nodeClipboardRef.current = {
+        node: structuredClone(node),
+        // The loop variables this subtree may reference; pasting somewhere
+        // they don't exist has to drop those bindings.
+        vars: loopVarsAt(state.model.nodes, nodeId),
+      };
       showToast(`Copied ${node.name || 'text'}`, 'success');
     },
     [showToast]
@@ -662,7 +944,7 @@ export default function App() {
     (function walk(n) {
       if (n.kind === 'component' && n.name) names.add(n.name);
       if (Array.isArray(n.children)) n.children.forEach(walk);
-    })(clip);
+    })(clip.node);
     const missing = [...names].filter(
       (nm) => !state.model.imports.some((i) => i.name === nm)
     );
@@ -673,7 +955,7 @@ export default function App() {
       if (target) resolved.push({ name: nm, paths: await resolveImportPath(target.path) });
     }
 
-    const clone = cloneWithNewIds(clip);
+    const clone = cloneWithNewIds(clip.node);
     const selId = selectedIdRef.current;
     const acceptsChildren = (n) => {
       if (n.id === 'layout') return true;
@@ -703,6 +985,22 @@ export default function App() {
         }
       }
       model.nodes.push(clone);
+      return model;
+    }, true);
+
+    // Pasted outside the loop it was copied from? Its bindings would throw.
+    mutateModel((model) => {
+      const landed = findNodeById(model.nodes, clone.id);
+      if (!landed) return model;
+      const inScope = loopVarsAt(model.nodes, clone.id);
+      const lost = (clip.vars || []).filter((v) => !inScope.includes(v));
+      const removed = stripLostBindings(landed, lost);
+      if (removed) {
+        showToast(
+          `Removed ${removed} binding${removed === 1 ? '' : 's'} that referenced ${lost.join(', ')}.`,
+          'info'
+        );
+      }
       return model;
     }, true);
     setSelectedId(clone.id);
@@ -843,7 +1141,10 @@ export default function App() {
               : [],
         };
       } else if (item.type === 'map') {
-        node = { id, kind: 'map', head: 'items.map((item) => (', children: [] };
+        // No source until one is picked in the props panel. An empty literal
+        // renders nothing; a placeholder name would throw "x is not defined"
+        // and take the preview down the moment the loop lands on the page.
+        node = { id, kind: 'map', head: '[].map((item) => (', children: [] };
       } else if (item.type === 'comment') {
         node = { id, kind: 'comment', value: ' Comment ' };
       } else if (item.type === 'text') {
@@ -902,6 +1203,18 @@ export default function App() {
       if (!state?.editable) return;
       const selId = selectedIdRef.current;
       const hasNodeSel = !!selId && selId !== 'frontmatter';
+
+      // Enter opens the floating editor for a selection that has one
+      // (frontmatter, <style>, <script>) — same as its "Edit code" button.
+      // Not gated on hasNodeSel: frontmatter is exactly one of these.
+      if (!mod && !e.altKey && !e.shiftKey && e.key === 'Enter') {
+        // On a focused control Enter means "activate this", not "open the
+        // selection" — leave those alone (including the Edit code button
+        // itself, which would otherwise fire twice).
+        if (t instanceof HTMLElement && t.closest('button, a, [role="button"]')) return;
+        if (openCodeWindowRef.current?.()) e.preventDefault();
+        return;
+      }
 
       if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
         if (!hasNodeSel) return;
@@ -1020,6 +1333,27 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [inPreview, exitPreview]);
 
+  // Escape backs out of a drilled-into component, one level at a time.
+  useEffect(() => {
+    if (inPreview || editStack.length < 2) return;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      const t = e.target;
+      // Let fields, menus, and dialogs consume their own Escape first.
+      if (
+        t instanceof HTMLElement &&
+        (t.closest('input, textarea, select, [contenteditable="true"]') ||
+          t.closest('.modal-overlay, .dd-popup, .insert-overlay, .code-window'))
+      ) {
+        return;
+      }
+      e.preventDefault();
+      closeComponent();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [inPreview, editStack.length, closeComponent]);
+
   // Capture a preview thumbnail for the welcome screen's recents list a few
   // seconds after the preview settles (page switch, refresh, or edit).
   useEffect(() => {
@@ -1108,21 +1442,38 @@ export default function App() {
     [mutateModel]
   );
 
+  // `renames` (loop editor only) carries the variable names this edit is
+  // changing, so references below the node follow along. A rename touches
+  // many nodes at once, so it saves immediately and gets its own history
+  // entry instead of coalescing with the keystrokes around it.
   const setNodeText = useCallback(
-    (nodeId, value) => {
+    (nodeId, value, renames) => {
+      const renaming = (renames || []).some((r) => r.from && r.to && r.from !== r.to);
       mutateModel(
         (model) => {
           const node = findNodeById(model.nodes, nodeId);
           if (!node) return model;
-          if (node.kind === 'map') node.head = value;
-          else if (node.kind === 'raw') node.inner = value;
+          if (node.kind === 'map') {
+            const prev = parseLoopHead(node.head);
+            node.head = value;
+            for (const { from, to } of renames || []) {
+              if (from && to && from !== to) renameLoopVar(node.children || [], from, to);
+            }
+            // Renames above already re-pointed the children, so compare the
+            // data sources and orphan-proof what reads from this item.
+            const next = parseLoopHead(value);
+            if (prev && next && prev.data !== next.data) {
+              const vars = [next.item, next.index].filter(Boolean);
+              if (vars.length) disconnectDependentLoops(node.children || [], vars);
+            }
+          } else if (node.kind === 'raw') node.inner = value;
           else if (node.kind === 'text' || node.kind === 'expr' || node.kind === 'comment') {
             node.value = value;
           }
           return model;
         },
-        false,
-        `text:${nodeId}`
+        renaming,
+        renaming ? undefined : `text:${nodeId}`
       );
     },
     [mutateModel]
@@ -1444,10 +1795,11 @@ export default function App() {
     }
   }
 
-  // Loop editor Data suggestions: the page's frontmatter declarations and
-  // imports, plus item/index variables from any ancestor loops.
+  // In-scope data at the selection: the page's frontmatter declarations and
+  // imports, plus the item/index variables of every enclosing loop. Feeds the
+  // loop editor's source list and the content editor's expression chips.
   const loopContext =
-    model && selectedNode?.kind === 'map'
+    model && selectedNode
       ? {
           frontmatter: model.extraFrontmatter || '',
           imports: model.imports || [],
@@ -1515,18 +1867,26 @@ export default function App() {
           : null
         : codeWinNode?.inner ?? null;
 
+  // Returns whether the selection actually has a code editor, so the Enter
+  // shortcut below knows whether it handled the key.
   const openCodeWindow = () => {
-    if (!selectedNode) return;
+    if (!selectedNode) return false;
     if (selectedNode.kind === 'frontmatter') {
       setCodeWin({ targetId: 'frontmatter', title: 'Frontmatter', language: 'javascript' });
-    } else if (selectedNode.kind === 'raw') {
+      return true;
+    }
+    if (selectedNode.kind === 'raw') {
       setCodeWin({
         targetId: selectedNode.id,
         title: `<${selectedNode.name}>`,
         language: selectedNode.name === 'style' ? 'css' : 'javascript',
       });
+      return true;
     }
+    return false;
   };
+  // Read by the keydown effect, which is set up long before this exists.
+  openCodeWindowRef.current = openCodeWindow;
 
   // Opens a public/ text file in the floating editor.
   const openAssetFile = useCallback(
@@ -1590,11 +1950,24 @@ export default function App() {
     const n = nodeAtPath(model.nodes, p.split('.').map(Number));
     if (!n) return null;
     const label = n.id === 'layout' ? currentLayoutName || n.name : crumbLabel(n);
+    // A dynamic tag renders an element, so it shouldn't wear the component
+    // colour on the canvas either.
     const kind =
-      n.kind === 'component' ? 'component' : n.kind === 'map' ? 'map' : 'element';
+      n.kind === 'component' && !n.dynamicTag
+        ? 'component'
+        : n.kind === 'map'
+          ? 'map'
+          : 'element';
     // The tag drives the overlay's icon, so it matches the Navigator row.
     const tag = n.kind === 'element' || n.kind === 'raw' ? n.name : null;
-    return { label, kind, tag, nodeKind: n.kind, isLayout: n.id === 'layout' };
+    return {
+      label,
+      kind,
+      tag,
+      nodeKind: n.kind,
+      isLayout: n.id === 'layout',
+      bound: kind === 'element' && isDataBound(n),
+    };
   };
 
   // ----------------------------------------------------------------
@@ -1616,14 +1989,32 @@ export default function App() {
     );
   }
 
-  const liveUrl = devUrl && currentPage ? devUrl + currentPage.route : null;
+  // The canvas always renders the page — editing a component just dims
+  // everything outside the instance being worked on.
+  const pageEntry = editStack[0] || currentPage;
+  const pageRoute = pageEntry?.route;
+  const focusPath = currentPage?.kind === 'component' ? currentPage.focusPath : null;
+  const liveUrl = devUrl && pageRoute ? devUrl + pageRoute : null;
 
   return (
     <div className="app">
       <div className="titlebar">
         <span className="app-title">{project.name}</span>
         <span className="spacer" />
-        <PageSwitcher pages={scan.pages} currentPage={currentPage} onSelect={selectPage} />
+        {editStack.length > 1 ? (
+          <button
+            className="page-switch-btn comp-back"
+            title="Back (Esc)"
+            onClick={closeComponent}
+          >
+            <ChevronLeftIcon size={13} />
+            <span className="comp-back-sep" />
+            <ElementComponentIcon size={13} />
+            <span className="page-switch-label">{currentPage?.name}</span>
+          </button>
+        ) : (
+          <PageSwitcher pages={scan.pages} currentPage={currentPage} onSelect={selectPage} />
+        )}
         <div className="url-group">
           <span
             className={`status-dot ${devStatus === 'on' ? 'on' : devStatus === 'starting' ? 'starting' : 'off'}`}
@@ -1640,25 +2031,28 @@ export default function App() {
           <span className="url">
             {liveUrl || (devStatus === 'starting' ? 'Starting Astro dev server…' : 'Preview offline')}
           </span>
+        </div>
+        <span className="spacer" />
+        {/* Both ways of viewing the site, kept together. */}
+        <div className="titlebar-actions">
           <button
-            className="ghost"
+            className="titlebar-btn"
             title="Open in browser"
             disabled={!liveUrl}
             onClick={() => window.avb.openExternal(liveUrl)}
           >
-            <ExternalIcon size={13} />
+            <ExternalIcon size={14} />
+          </button>
+          <button
+            className={`titlebar-btn preview-btn ${inPreview ? 'on' : ''}`}
+            title={inPreview ? 'Exit preview (Esc)' : 'Preview the site'}
+            disabled={!devUrl}
+            onClick={() => (inPreview ? exitPreview() : enterPreview())}
+          >
+            <PreviewIcon size={15} />
           </button>
         </div>
-        <span className="spacer" />
         <GitChip project={project} showToast={showToast} flushSave={flushSave} />
-        <button
-          className={`preview-btn ${inPreview ? 'on' : ''}`}
-          title={inPreview ? 'Exit preview (Esc)' : 'Preview the site'}
-          disabled={!devUrl}
-          onClick={() => (inPreview ? exitPreview() : enterPreview())}
-        >
-          <PreviewIcon size={15} />
-        </button>
       </div>
 
       <div className="main">
@@ -1692,6 +2086,7 @@ export default function App() {
                 revealTick={revealTick}
                 onSelect={setSelectedId}
                 onHoverNode={setHoverNodeId}
+                onOpenComponent={(name, id) => openComponent(name, pathFor(id))}
                 onChangeLayout={changeLayout}
                 onDropComponent={addComponent}
                 onMoveNode={moveNode}
@@ -1716,6 +2111,8 @@ export default function App() {
                 project={project}
                 showToast={showToast}
                 onOpenFile={openAssetFile}
+                pick={assetPick}
+                onPickCancel={endAssetPick}
               />
             )}
           </div>
@@ -1727,7 +2124,7 @@ export default function App() {
             devStatus={devStatus}
             devLog={devLog}
             devDiag={devDiag}
-            route={currentPage?.route}
+            route={pageRoute}
             refreshKey={refreshKey}
             crumbs={crumbs}
             onCrumb={(id) => setSelectedId(id)}
@@ -1736,9 +2133,21 @@ export default function App() {
             selPath={pathFor(selectedId)}
             navHoverPath={pathFor(hoverNodeId)}
             overlayInfo={overlayInfo}
+            focusPath={focusPath}
             device={device}
             onDevice={setDevice}
             onSelectPath={(p) => {
+              // Editing a component: the canvas still shows the whole page, so
+              // a click in the dimmed area (or on nothing) means "I'm done in
+              // here" and backs out. Clicks on the lit instance stay put —
+              // the page's markers don't address a component's internals, so
+              // there's no node here to map them onto.
+              if (focusPath) {
+                const inside = p && (p === focusPath || p.startsWith(focusPath + '.'));
+                if (!inside) closeComponent();
+                return;
+              }
+              if (!p) return;
               const n = model && nodeAtPath(model.nodes, p.split('.').map(Number));
               if (n) {
                 setSelectedId(n.id);
@@ -1746,6 +2155,11 @@ export default function App() {
                 setLeftTab('navigator');
                 setRevealTick((t) => t + 1);
               }
+            }}
+            onOpenPath={(p) => {
+              // Double-clicking a component on the canvas drills into it.
+              const n = model && nodeAtPath(model.nodes, p.split('.').map(Number));
+              if (n?.kind === 'component') openComponent(n.name, p);
             }}
           />
         </div>
@@ -1771,6 +2185,9 @@ export default function App() {
               projectClasses={projectClasses}
               allowAttrs={
                 selectedNode?.kind === 'element' ||
+                // A dynamic tag renders a real element, so it takes attributes
+                // even though it has no component file behind it.
+                !!selectedNode?.dynamicTag ||
                 (selectedNode?.kind === 'component' &&
                   !!insertables.find((c) => c.name === selectedNode.name)?.hasRest)
               }
@@ -1779,8 +2196,10 @@ export default function App() {
               }
               onRenameProp={(oldName, newName) => renameProp(selectedId, oldName, newName)}
               onChangeTag={(tag) => changeElementTag(selectedId, tag)}
-              onSetText={(value) =>
-                selectedId === 'frontmatter' ? setFrontmatter(value) : setNodeText(selectedId, value)
+              onSetText={(value, renames) =>
+                selectedId === 'frontmatter'
+                  ? setFrontmatter(value)
+                  : setNodeText(selectedId, value, renames)
               }
               onSetContent={(value) => setNodeContent(selectedId, value)}
               onSetInline={(kids) => setNodeInline(selectedId, kids)}

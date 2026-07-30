@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import Dropdown from '../ui/Dropdown.jsx';
 import { canContainTag } from '../elementSchemas.js';
+import { isDataBound } from '../bindings.js';
 import { setDrag, clearDrag, getDrag } from '../dragState.js';
 import {
   LayoutIcon,
@@ -16,6 +16,7 @@ import {
   ExpandVerticalIcon,
   CollapseVerticalIcon,
   elementIcon,
+  CustomElementIcon,
 } from '../ui/Icons.jsx';
 
 
@@ -33,6 +34,7 @@ export default function StructurePanel({
   revealTick,
   onSelect,
   onHoverNode,
+  onOpenComponent,
   onChangeLayout,
   onDropComponent,
   onMoveNode,
@@ -273,17 +275,6 @@ export default function StructurePanel({
           </span>
         </div>
 
-        {!hasNode(model.nodes, 'layout') && layouts.length > 0 && (
-          <div style={{ padding: '0 4px 8px' }}>
-            <Dropdown
-              value=""
-              placeholder="Add layout…"
-              options={layouts.map((l) => ({ value: l.name, label: l.name }))}
-              onChange={(v) => v && onChangeLayout(v)}
-            />
-          </div>
-        )}
-
         <NodeList
           nodes={model.nodes}
           parentId={null}
@@ -292,6 +283,7 @@ export default function StructurePanel({
           currentLayoutName={currentLayoutName}
           onChangeLayout={onChangeLayout}
           onHoverNode={onHoverNode}
+          onOpenComponent={onOpenComponent}
           isCollapsed={isCollapsed}
           dropTarget={dropTarget}
           setDropTarget={setDropTarget}
@@ -464,6 +456,7 @@ function TreeNode({ node, parentId, index, depth, ...ctx }) {
     performDrop,
     onSelect,
     onHoverNode,
+    onOpenComponent,
     toggleCollapse,
     openContextMenu,
   } = ctx;
@@ -489,11 +482,10 @@ function TreeNode({ node, parentId, index, depth, ...ctx }) {
   const nodeCollapsed = isCollapsed(node);
   const isDropInto = dropTarget?.intoId === node.id;
 
-  let { icon, label, preview } = describeNode(node);
+  let { icon, label } = describeNode(node);
   if (isLayoutNode) {
     icon = <LayoutIcon size={13} />;
     label = currentLayoutName || node.name;
-    preview = '';
   }
 
   return (
@@ -501,7 +493,7 @@ function TreeNode({ node, parentId, index, depth, ...ctx }) {
       <div
         ref={rowRef}
         data-node-id={node.id}
-        className={`structure-node ${node.kind === 'component' ? 'is-component' : ''} ${node.kind === 'map' ? 'is-map' : ''} ${isLayoutNode ? 'layout-node' : ''} ${isSelected ? 'selected' : ''}`}
+        className={`structure-node ${node.kind === 'component' && !node.dynamicTag ? 'is-component' : ''} ${node.kind === 'map' || (isDataBound(node) && !(node.kind === 'component' && !node.dynamicTag)) ? 'is-map' : ''} ${isLayoutNode ? 'layout-node' : ''} ${isSelected ? 'selected' : ''}`}
         style={{
           paddingLeft: 6 + depth * 16,
           ...(isDropInto ? { borderColor: 'var(--accent)', background: 'var(--accent-soft)' } : {}),
@@ -533,6 +525,12 @@ function TreeNode({ node, parentId, index, depth, ...ctx }) {
           e.stopPropagation();
           onSelect(node.id);
         }}
+        onDoubleClick={(e) => {
+          // Drill into a component's own file, the way Webflow opens one.
+          if (node.kind !== 'component' || node.dynamicTag || !onOpenComponent) return;
+          e.stopPropagation();
+          onOpenComponent(node.name, node.id);
+        }}
         onMouseEnter={() => onHoverNode && onHoverNode(node.id)}
         onMouseLeave={() => onHoverNode && onHoverNode(null)}
         onContextMenu={(e) => {
@@ -561,7 +559,6 @@ function TreeNode({ node, parentId, index, depth, ...ctx }) {
         <span className="label" style={node.kind === 'text' ? { fontWeight: 400, fontStyle: 'italic' } : {}}>
           {label}
         </span>
-        {preview && <span className="prop-preview">{preview}</span>}
       </div>
 
       {showChildren && !nodeCollapsed && (
@@ -594,14 +591,6 @@ function findWithParent(nodes, id, parent) {
   return null;
 }
 
-function hasNode(list, id) {
-  for (const n of list) {
-    if (n.id === id) return true;
-    if (Array.isArray(n.children) && hasNode(n.children, id)) return true;
-  }
-  return false;
-}
-
 // Components/elements whose children are all text (or comments) start
 // collapsed — their text is editable via the Content field in the props panel.
 // Everything starts collapsed; expanding is always an explicit action
@@ -610,16 +599,18 @@ function defaultCollapsed(node) {
   return Array.isArray(node.children) && node.children.length > 0;
 }
 
+// The row's icon already says what kind a node is, so no trailing kind badge
+// ("comment", "loop", …) — it only repeated the icon in words.
 function describeNode(node) {
   switch (node.kind) {
     case 'text':
-      return { icon: <TextIcon size={12} />, label: truncate(node.value, 34), preview: '' };
+      return { icon: <TextIcon size={12} />, label: truncate(node.value, 34) };
     case 'comment':
-      return { icon: <CommentIcon size={12} />, label: truncate(node.value.trim(), 30), preview: 'comment' };
+      return { icon: <CommentIcon size={12} />, label: truncate(node.value.trim(), 30) };
     case 'raw':
-      return { icon: <CodeIcon size={12} />, label: node.name, preview: 'raw' };
+      return { icon: <CodeIcon size={12} />, label: node.name };
     case 'raw-line':
-      return { icon: <CodeIcon size={12} />, label: truncate(node.value, 30), preview: '' };
+      return { icon: <CodeIcon size={12} />, label: truncate(node.value, 30) };
     case 'element': {
       // Webflow-style label: the first class name when the element has
       // classes, the bare tag name otherwise.
@@ -627,26 +618,29 @@ function describeNode(node) {
       const classes =
         cls && cls.type === 'string' ? cls.value.trim().split(/\s+/).filter(Boolean) : [];
       const label = classes.length ? truncate(classes[0], 40) : node.name;
-      return { icon: elementIcon(node.name), label, preview: '' };
+      return { icon: elementIcon(node.name), label };
     }
     case 'chunk-group':
-      return { icon: <FileIcon size={12} />, label: node.name, preview: 'chunk' };
+      return { icon: <FileIcon size={12} />, label: node.name };
     case 'expr':
       return {
         icon: <CodeIcon size={12} />,
         label: truncate(node.value.replace(/\s+/g, ' '), 34),
-        preview: 'code',
       };
     case 'map': {
       const at = node.head.indexOf('.map');
       return {
         icon: <RepeatIcon size={12} />,
         label: at > 0 ? node.head.slice(0, at + 4) : truncate(node.head, 24),
-        preview: 'loop',
       };
     }
     default:
-      return { icon: <ElementComponentIcon size={14} />, label: node.name, preview: '' };
+      // `<Tag>` from `const Tag = tag` is a dynamic element, not a component
+      // — no file behind it, so it shouldn't wear the component's colours.
+      if (node.dynamicTag) {
+        return { icon: <CustomElementIcon size={12} />, label: node.name };
+      }
+      return { icon: <ElementComponentIcon size={14} />, label: node.name };
   }
 }
 

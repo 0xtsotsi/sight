@@ -44,6 +44,46 @@ const srcCandidates = (abs) => [
   `file:///${encodePath(abs)}`,
 ];
 
+// Formats Chromium can load through FontFace. .eot can't, so it keeps the
+// badge.
+export const FONT_EXT = /\.(woff2?|ttf|otf)$/i;
+
+// One CSS family per file, derived from its path so two tiles showing the
+// same font share it.
+const familyFor = (abs) => {
+  let h = 0;
+  for (let i = 0; i < abs.length; i++) h = (h * 31 + abs.charCodeAt(i)) | 0;
+  return `avb-font-${(h >>> 0).toString(36)}`;
+};
+
+// Registers a font file so a tile can render "Aa" in it. Loaded fonts stay
+// registered: a project has few, and scrolling the Assets panel (which
+// unmounts tiles) shouldn't refetch them. Resolves to null when the file
+// isn't a usable font, so the caller falls back to the badge.
+const fontLoads = new Map(); // abs -> Promise<string|null>
+function loadFontPreview(abs, srcs) {
+  if (!fontLoads.has(abs)) {
+    const family = familyFor(abs);
+    fontLoads.set(
+      abs,
+      (async () => {
+        for (const src of srcs) {
+          try {
+            const face = new FontFace(family, `url("${src}")`);
+            await face.load();
+            document.fonts.add(face);
+            return family;
+          } catch {
+            /* unreachable source or unsupported file — try the next */
+          }
+        }
+        return null;
+      })()
+    );
+  }
+  return fontLoads.get(abs);
+}
+
 // Thumbnail for one asset: images render directly, videos show their first
 // frame and play muted on loop while hovered, everything else gets a badge.
 // `onImageLoad` reports natural dimensions to the caller when available.
@@ -59,6 +99,22 @@ export default function AssetThumb({ file, className = '', onImageLoad, onClick 
   const isText = TEXT_EXT.test(file.name);
   const isVideo = !isText && VIDEO_EXT.test(file.name);
   const isImage = !isText && !isVideo && IMAGE_EXT.test(file.name);
+  const isFont = !isText && !isVideo && !isImage && FONT_EXT.test(file.name);
+
+  // Null until the face loads (or for good, if it can't) — the badge shows
+  // meanwhile, so a font that never loads looks exactly as it did before.
+  const [fontFamily, setFontFamily] = useState(null);
+  React.useEffect(() => {
+    setFontFamily(null);
+    if (!isFont) return undefined;
+    let alive = true;
+    loadFontPreview(file.abs, candidates).then((f) => {
+      if (alive) setFontFamily(f);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isFont, file.abs, candidates]);
 
   const hoverPlay = () => {
     const v = videoRef.current;
@@ -110,6 +166,10 @@ export default function AssetThumb({ file, className = '', onImageLoad, onClick 
           }
           onError={nextSrc}
         />
+      ) : isFont && fontFamily ? (
+        <span className="asset-font" style={{ fontFamily: `"${fontFamily}"` }}>
+          Aa
+        </span>
       ) : (
         <span className="asset-ext">
           {isText ? <CodeIcon size={16} /> : <FileIcon size={16} />}

@@ -62,6 +62,8 @@ export default function PreviewPane({
   navHoverPath,
   overlayInfo,
   onSelectPath,
+  onOpenPath,
+  focusPath,
   device,
   onDevice,
 }) {
@@ -109,17 +111,19 @@ export default function PreviewPane({
       const d = e.data;
       if (d?.type === 'avb:rects') setRects(d.rects || {});
       else if (d?.type === 'avb:hover-node') setCanvasHover(d.path || null);
-      else if (d?.type === 'avb:click-node' && d.path && onSelectPath) {
-        clickedPathRef.current = d.path;
-        onSelectPath(d.path);
+      else if (d?.type === 'avb:click-node' && onSelectPath) {
+        clickedPathRef.current = d.path || null;
+        onSelectPath(d.path || null);
+      } else if (d?.type === 'avb:open-node' && d.path && onOpenPath) {
+        onOpenPath(d.path);
       }
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, [onSelectPath]);
+  }, [onSelectPath, onOpenPath]);
 
   const hoverPath = navHoverPath || canvasHover;
-  const trackKey = [...new Set([selPath, hoverPath].filter(Boolean))].join('|');
+  const trackKey = [...new Set([selPath, hoverPath, focusPath].filter(Boolean))].join('|');
   const sendTrack = React.useCallback(() => {
     const w = iframeRef.current?.contentWindow;
     if (!w) return;
@@ -317,6 +321,17 @@ export default function PreviewPane({
                 title="Site preview"
                 onLoad={sendTrack}
               />
+              {/* Editing a component: the page stays in context and everything
+                  around the instance dims, so the piece being worked on is
+                  the only lit part of the canvas. */}
+              {focusPath &&
+                (rects[focusPath] || []).map((r, i) => (
+                  <div
+                    key={`focus-${i}`}
+                    className="node-focus"
+                    style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
+                  />
+                ))}
               {[
                 hoverPath && hoverPath !== selPath ? { path: hoverPath, type: 'hover' } : null,
                 selPath ? { path: selPath, type: 'sel' } : null,
@@ -331,7 +346,7 @@ export default function PreviewPane({
                   return list.map((r, i) => (
                     <div
                       key={`${o.type}-${i}`}
-                      className={`node-outline ${o.type} ${info.kind}`}
+                      className={`node-outline ${o.type} ${info.kind}${info.bound ? ' bound' : ''}`}
                       style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
                     >
                       {i === 0 && (
