@@ -744,6 +744,101 @@ function parseSlots(source) {
   return found.has('default') ? ['default', ...named] : named;
 }
 
+// ---------------------------------------------------------------------------
+// Transition directive recognition
+//
+// The Transitions panel can also read transitions off a parsed model rather
+// than rescanning the raw source — handy for inline hover cards or for any
+// future feature that doesn't want to round-trip to the file scanner. The
+// shape returned matches the scanner's: each row is
+//   { kind, value, page, line, col }.
+// `page` here is a synthetic `{ rel: '<model>' }` — the caller can replace it
+// with a real page descriptor since models don't carry a file path. `line`
+// and `col` are 1-based start positions in the serialized source, so a future
+// "open at location" feature can jump straight to the directive.
+//
+// We only act on `transition:name` and `transition:animate` — the two Astro
+// 5 directives that participate in a morph. `transition:persist` doesn't
+// carry a value to share and is out of scope for the panel.
+// ---------------------------------------------------------------------------
+
+// Recursively walks a parsed model and returns the same {kind, value, …}
+// shape the scanner produces. Recursion uses the same `path` the marker
+// serializer does, so line numbers from `serializePage(model)` match the
+// one the user reads in the editor.
+function parseTransitionsFromModel(model, source) {
+  const out = [];
+  if (!model || !Array.isArray(model.nodes)) return out;
+  // Compute line starts lazily — only if we need them. A model with no
+  // transitions returns the empty list without paying for the serialization.
+  let lineStarts = null;
+  const positionOf = (offset) => {
+    if (lineStarts == null) {
+      lineStarts = computeLineStarts(source != null ? source : serializePage(model));
+    }
+    return offsetToLineCol(lineStarts, offset);
+  };
+  for (const node of model.nodes) {
+    walkNode(node, '', out, positionOf);
+  }
+  return out;
+}
+
+function walkNode(node, path, out, positionOf) {
+  if (!node) return;
+  if (node.props) {
+    for (const [name, v] of Object.entries(node.props)) {
+      if (name === 'transition:name' && v && (v.type === 'string' || v.type === 'expr')) {
+        out.push({
+          kind: 'name',
+          value: v.type === 'string' ? v.value : v.value,
+          page: { rel: '<model>' },
+          // The model doesn't carry positions, so the caller can
+          // re-derive them from the serialized source if needed.
+          line: 0,
+          col: 0,
+          path: path,
+          meta: { expr: v.type === 'expr' },
+        });
+      } else if (name === 'transition:animate' && v && (v.type === 'string' || v.type === 'expr')) {
+        out.push({
+          kind: 'animate',
+          value: v.type === 'string' ? v.value : v.value,
+          page: { rel: '<model>' },
+          line: 0,
+          col: 0,
+          path: path,
+          meta: { expr: v.type === 'expr' },
+        });
+      }
+    }
+  }
+  if (Array.isArray(node.children)) {
+    node.children.forEach((child, i) =>
+      walkNode(child, path ? path + '.' + i : String(i), out, positionOf)
+    );
+  }
+}
+
+function computeLineStarts(source) {
+  const starts = [0];
+  for (let i = 0; i < source.length; i++) {
+    if (source.charCodeAt(i) === 10 /* \n */) starts.push(i + 1);
+  }
+  return starts;
+}
+
+function offsetToLineCol(starts, offset) {
+  // Binary search for the line.
+  let lo = 0, hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (starts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return { line: lo + 1, col: offset - starts[lo] + 1 };
+}
+
 // Extracts the tag from `interface Props extends HTMLAttributes<"button">`
 // so the UI can offer that element's built-in attributes (type, disabled, …).
 function parseExtendsTag(source) {
@@ -952,4 +1047,6 @@ module.exports = {
   parseAttrs,
   serializeAttrs,
   serializeNodeToJson,
+
+  parseTransitionsFromModel,
 };

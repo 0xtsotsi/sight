@@ -565,6 +565,67 @@ if (!process.isMainFrame) {
     } catch {
       /* ignore */
     }
+
+    // View-transitions lifecycle forwarder. Astro's ClientRouter fires
+    // astro:before-swap / astro:after-swap / astro:page-load on every
+    // client-side navigation; we relay them up to the parent so the
+    // Transitions panel can show a live event log. Pages without a
+    // ClientRouter simply never emit these events — the listeners are
+    // a no-op then.
+    const forwardVt = (name, extra) => {
+      try {
+        window.parent.postMessage(
+          { type: 'sight:vt', name, ts: Date.now(), ...extra },
+          '*'
+        );
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener('astro:before-swap', (e) => {
+      const from = e && e.from ? new URL(e.from, location.href).pathname + new URL(e.from, location.href).search : location.pathname;
+      const to = e && e.to ? new URL(e.to, location.href).pathname + new URL(e.to, location.href).search : location.pathname;
+      forwardVt('astro:before-swap', { from, to });
+    });
+    window.addEventListener('astro:after-swap', (e) => {
+      const from = e && e.from ? new URL(e.from, location.href).pathname + new URL(e.from, location.href).search : location.pathname;
+      const to = e && e.to ? new URL(e.to, location.href).pathname + new URL(e.to, location.href).search : location.pathname;
+      forwardVt('astro:after-swap', { from, to });
+    });
+    window.addEventListener('astro:page-load', () => {
+      forwardVt('astro:page-load', { path: location.pathname + location.search });
+    });
+
+    // The parent can ask us to replay the last transition at a slowed-down
+    // speed. The handler does its best to retrigger the view-transition
+    // pipeline without an actual navigation by setting a CSS var that the
+    // page's transition CSS can pick up, then calling startViewTransition.
+    // Pages that don't define a slow-down rule for --sight-vt-speed will
+    // play at normal speed — the panel notes this case.
+    window.addEventListener('message', (msg) => {
+      const d = msg && msg.data;
+      if (!d || d.type !== 'sight:replay') return;
+      const speed = typeof d.speed === 'number' && d.speed > 0 && d.speed <= 1 ? d.speed : 0.25;
+      // CSS custom property the page's own transition rules can multiply
+      // their durations by. The inverse because lower speed = longer time.
+      const mult = 1 / speed;
+      try {
+        document.documentElement.style.setProperty('--sight-vt-speed-mult', String(mult));
+        // Astro 5 reads --astro-transition-duration directly.
+        const base = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--astro-transition-duration')) || 0.22;
+        document.documentElement.style.setProperty('--astro-transition-duration', `${base * mult}s`);
+        if (typeof document.startViewTransition === 'function') {
+          document.startViewTransition(() => {});
+        }
+        // Restore after the transition would have completed.
+        setTimeout(() => {
+          try { document.documentElement.style.removeProperty('--astro-transition-duration'); } catch {}
+          try { document.documentElement.style.removeProperty('--sight-vt-speed-mult'); } catch {}
+        }, (base * mult + 0.5) * 1000);
+      } catch {
+        /* startViewTransition unsupported — just log */
+      }
+    });
     try {
       const ro = new ResizeObserver(report);
       ro.observe(document.documentElement);
@@ -761,5 +822,17 @@ contextBridge.exposeInMainWorld('avb', {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('ai:stream', listener);
     return () => ipcRenderer.removeListener('ai:stream', listener);
+
+  // View-transitions studio (read-only scan of the project's pages + layouts).
+  listTransitions: invoke('viewTransitions:list'),
+  startTransitionLog: invoke('viewTransitions:startLog'),
+  stopTransitionLog: invoke('viewTransitions:stopLog'),
+  // The preview iframe forwards astro:transitions lifecycle events here so
+  // main can rebroadcast them to the panel.
+  postTransitionEvent: (evt) => ipcRenderer.invoke('viewTransitions:event', evt),
+  onTransition: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('transition:event', listener);
+    return () => ipcRenderer.removeListener('transition:event', listener);
   },
 });

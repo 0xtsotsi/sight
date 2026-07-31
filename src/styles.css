@@ -3300,3 +3300,211 @@ button.danger:hover:not(:disabled) {
 .a11y-group { padding: 12px 16px 0; } .a11y-group h3 { text-transform: capitalize; font-size: 11px; color: var(--text-dim); display: flex; justify-content: space-between; margin-bottom: 8px; }
 .a11y-violation { padding: 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; } .a11y-violation-title strong { display: block; line-height: 1.35; } .a11y-violation code { display: block; color: var(--text-dim); font-family: var(--mono); font-size: 10px; margin: 6px 0; overflow-wrap: anywhere; } .a11y-fix { padding: 5px 8px; color: var(--accent); background: transparent; border-color: var(--accent); } .a11y-empty { padding: 24px 16px; color: var(--text-dim); }
 @media (prefers-reduced-motion: reduce) { .a11y-panel, .a11y-chip { transition: none; } }
+
+/* Transitions studio panel. Mounts in the right rail when the user picks
+   the "Transitions" tab; renders a graph, a list, and a live event log. */
+.transitions-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  padding: 12px 12px 20px;
+  font-size: 11.5px;
+  color: var(--text);
+}
+.transitions-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.transitions-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.transitions-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+.transitions-counts .dot { opacity: 0.5; }
+
+.transitions-toolbar {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 8px;
+}
+.transitions-toolbar button {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.transitions-toolbar button:hover:not(:disabled) {
+  background: var(--bg-active);
+  border-color: var(--border-strong);
+}
+.transitions-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.transitions-log-toggle.on {
+  background: var(--bg-active);
+  border-color: var(--accent, var(--border-strong));
+  color: var(--text);
+}
+
+.transitions-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: rgba(255, 80, 80, 0.08);
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.transitions-graph-wrap {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 12px;
+  min-height: 200px;
+}
+.transitions-graph { display: block; width: 100%; height: auto; }
+.transitions-graph .transitions-edge line {
+  stroke: var(--text-faint);
+  stroke-width: 1.2;
+  fill: none;
+}
+.transitions-graph .transitions-edge.highlight line {
+  stroke: var(--accent, var(--text));
+  stroke-width: 1.6;
+}
+.transitions-graph .transitions-edge-label {
+  font-size: 10px;
+  fill: var(--text-faint);
+  paint-order: stroke;
+  stroke: var(--bg-input);
+  stroke-width: 3px;
+}
+.transitions-graph .transitions-node circle {
+  fill: var(--bg-active);
+  stroke: var(--text-faint);
+  stroke-width: 1.2;
+  cursor: pointer;
+  transition: fill 0.12s, stroke 0.12s;
+}
+.transitions-graph .transitions-node.has-name circle { fill: var(--accent, var(--bg-active)); stroke: var(--text); }
+.transitions-graph .transitions-node.isolated circle { fill: var(--bg-input); }
+.transitions-graph .transitions-node:hover circle { stroke: var(--text); }
+.transitions-graph .transitions-node.selected circle { stroke: var(--text); stroke-width: 2; }
+.transitions-graph .transitions-node-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  fill: var(--text);
+}
+.transitions-graph .transitions-node-route {
+  font-size: 9.5px;
+  fill: var(--text-faint);
+}
+.transitions-graph .transitions-empty-label {
+  font-size: 12px;
+  fill: var(--text-faint);
+}
+
+.transitions-section { margin-bottom: 16px; }
+.transitions-section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.transitions-section-hint {
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+  font-style: italic;
+}
+.transitions-empty {
+  color: var(--text-faint);
+  font-size: 11px;
+  padding: 6px 0;
+}
+.transitions-empty code {
+  font-size: 10.5px;
+  background: var(--bg-input);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.transitions-edge-list,
+.transitions-list,
+.transitions-event-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.transitions-edge-row,
+.transitions-row,
+.transitions-event-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+.transitions-edge-row:first-child,
+.transitions-row:first-child,
+.transitions-event-row:first-child { border-top: none; }
+.transitions-edge-row:nth-child(even),
+.transitions-row:nth-child(even),
+.transitions-event-row:nth-child(even) { background: rgba(255, 255, 255, 0.012); }
+
+.transitions-edge-name {
+  font-weight: 500;
+  color: var(--text);
+  min-width: 60px;
+}
+.transitions-edge-sides { color: var(--text-faint); flex: 1; }
+.transitions-edge-count { color: var(--text-faint); font-size: 10.5px; }
+
+.transitions-kind {
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.transitions-kind.kind-name { background: var(--accent, var(--bg-active)); color: var(--text); }
+.transitions-kind.kind-vt-name { background: rgba(120, 80, 200, 0.2); color: var(--text); }
+.transitions-kind.kind-animate { background: rgba(80, 160, 200, 0.2); color: var(--text); }
+.transitions-value { color: var(--text); font-weight: 500; min-width: 80px; }
+.transitions-page { color: var(--text-faint); flex: 1; font-size: 10.5px; }
+.transitions-loc { color: var(--text-faint); font-size: 10px; }
+
+.transitions-event-row { gap: 10px; }
+.transitions-event-name { color: var(--text); font-weight: 500; min-width: 110px; }
+.transitions-event-route { color: var(--text-faint); font-size: 10.5px; }

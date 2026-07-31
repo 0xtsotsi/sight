@@ -126,6 +126,25 @@ export default function PreviewPane({
     setSelOcc(0);
   }, [selPath]);
 
+  // View-transitions forwarder. The preview iframe (preload) attaches
+  // listeners for Astro's astro:transitions lifecycle events and posts
+  // them up as { type: 'sight:vt', name, ts, ... }. We relay them to the
+  // main process, which re-broadcasts to the Transitions panel.
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return;
+      const d = e.data;
+      if (d?.type !== 'sight:vt') return;
+      try {
+        window.avb?.postTransitionEvent?.(d);
+      } catch {
+        /* bridge not available — IPC stays silent */
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
   React.useEffect(() => {
     const onMsg = (e) => {
       if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return;

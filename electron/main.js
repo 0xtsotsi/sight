@@ -26,6 +26,8 @@ const { register: registerDeployIpc } = require('./deploy/ipc');
 const { applyPatchToFile, validatePatch } = require('./ai/apply');
 const { getProvider } = require('./ai/providers/registry');
 const { serializeNodeToJson } = require('./astroParser');
+
+const transitionsScanner = require('./transitions/scanner');
 const { autoUpdater } = require('electron-updater');
 const { normalizeAuditResults } = require('./a11y/audit');
 
@@ -2235,6 +2237,18 @@ function readAstroLock(projectPath) {
   return null;
 }
 
+// A small bridge for the preview iframe's astro:transitions events. The
+// renderer calls this when it sees a matching postMessage from its iframe.
+ipcMain.handle('viewTransitions:event', (_e, evt) => {
+  if (!transitionLogActive) return { ok: false, reason: 'inactive' };
+  if (!evt || typeof evt !== 'object') return { ok: false, reason: 'bad-payload' };
+  // Re-broadcast to every BrowserWindow so the panel in any frame receives it.
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('transition:event', evt);
+  }
+  return { ok: true };
+});
+
 // Serialize dev:start calls — concurrent spawns race Astro's daemon lock and
 // the loser dies with "exited before becoming ready".
 let devStartInFlight = null;
@@ -2246,6 +2260,43 @@ ipcMain.handle('dev:start', (_e, projectPath) => {
   });
   return devStartInFlight;
 });
+
+// ---------------------------------------------------------------------------
+// View-transitions studio
+//
+// The Transitions panel in the page editor (src/panels/TransitionsPanel.jsx)
+// shows every transition:name, transition:animate, and view-transition-name in
+// the project as a graph. The actual scanning is read-only, so this just wraps
+// the scanner with an IPC boundary.
+//
+// The :startLog / :stopLog pair doesn't do anything server-side: the live
+// preview iframe posts `astro:before-swap` / `astro:after-swap` / `astro:page-load`
+// events to the parent via window.parent.postMessage, the renderer forwards
+// them to the main process, and main broadcasts a `transition:event` over IPC.
+// Toggling the log here is bookkeeping so the renderer can keep one listener
+// alive per panel mount instead of per nav.
+// ---------------------------------------------------------------------------
+
+let transitionLogActive = false;
+
+ipcMain.handle('viewTransitions:list', (_e, projectPath) => {
+  try {
+    return transitionsScanner.scanProject(projectPath);
+  } catch (err) {
+    return { transitions: [], pages: [], error: String(err && err.message || err) };
+  }
+});
+
+ipcMain.handle('viewTransitions:startLog', () => {
+  transitionLogActive = true;
+  return { ok: true, active: true };
+});
+
+ipcMain.handle('viewTransitions:stopLog', () => {
+  transitionLogActive = false;
+  return { ok: true, active: false };
+});
+
 
 async function doDevStart(projectPath) {
   if (devServer && devServer.projectPath === projectPath) {
