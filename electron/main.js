@@ -30,6 +30,7 @@ const {
 const { scaffoldProject } = require('./scaffold');
 const { importersOf } = require('./cmsRefs');
 const agentCredential = require('./agentCredential');
+const { register: registerDeployIpc } = require('./deploy/ipc');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
@@ -2529,3 +2530,8 @@ ipcMain.handle('shell:openExternal', async (_e, url) => {
   if (/^https?:\/\//.test(url)) shell.openExternal(url);
   return { ok: true };
 });
+
+// Deploy providers (Vercel / Netlify / Cloudflare). Token material is
+// held only in main's safeStorage-encrypted in-memory map; the renderer
+// never sees a token, only `hasToken` / `setToken` / `clearToken`.
+registerDeployIpc(ipcMain);

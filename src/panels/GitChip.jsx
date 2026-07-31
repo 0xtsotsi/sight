@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { cleanError } from '../App.jsx';
-import { BranchIcon, CheckIcon, ExternalIcon, CloseIcon } from '../ui/Icons.jsx';
+import { BranchIcon, CheckIcon, ExternalIcon, CloseIcon, RocketIcon } from '../ui/Icons.jsx';
+import DeployModal from './DeployModal.jsx';
 
 // owner/repo out of any GitHub remote form (https or ssh), for display.
 const repoSlug = (url) => {
@@ -25,6 +26,7 @@ export default function GitChip({ project, showToast, flushSave, onWorktreeChang
   const [busy, setBusy] = useState(null);
   const working = busy !== null;
   const [showPublish, setShowPublish] = useState(false);
+  const [showDeploy, setShowDeploy] = useState(false);
   const [switchTo, setSwitchTo] = useState(null); // branch awaiting a dirty-tree decision
   const wrapRef = useRef(null);
 
@@ -288,6 +290,16 @@ export default function GitChip({ project, showToast, flushSave, onWorktreeChang
                 >
                   {pushLabel}
                 </button>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    setShowDeploy(true);
+                  }}
+                  disabled={working}
+                  title="Build and deploy to Vercel, Netlify, or Cloudflare"
+                >
+                  <RocketIcon size={11} /> Deploy…
+                </button>
                 {info.dirty && (
                   <div className="hint-text">
                     You have uncommitted changes — commit them first to include them.
@@ -338,6 +350,14 @@ export default function GitChip({ project, showToast, flushSave, onWorktreeChang
           onClose={() => setShowPublish(false)}
           onPublish={publish}
           openExternal={(u) => window.avb.openExternal(u)}
+        />
+      )}
+
+      {showDeploy && (
+        <DeployModal
+          project={project}
+          branch={info.branch}
+          onClose={() => setShowDeploy(false)}
         />
       )}
     </div>

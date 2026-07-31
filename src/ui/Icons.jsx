@@ -438,6 +438,14 @@ export const ExternalIcon = (p) => (
   </I>
 );
 
+export const RocketIcon = (p) => (
+  <I {...p}>
+    <path d="M12 3c3.5 0 6 2.5 6 6 0 2.6-1.4 4.8-3.5 6L13 21h-2l-1.5-6C7.4 13.8 6 11.6 6 9c0-3.5 2.5-6 6-6Z" />
+    <path d="M9 14.5 4.5 19 5 20.5l1.5-.5L11 15.5" />
+    <path d="m15 14.5 4.5 4.5-1.5.5L13 15.5" />
+  </I>
+);
+
 export const MaximizeIcon = (p) => (
   <I {...p}>
     <path d="M2.5 5.5v-3h3M13.5 5.5v-3h-3M2.5 10.5v3h3M13.5 10.5v3h-3" />
