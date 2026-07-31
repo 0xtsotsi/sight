@@ -3,44 +3,33 @@ import { ASTRO_IMAGE_DEFAULTS } from '../elementSchemas/astro-image.js';
 
 const FORMAT_OPTIONS = ['avif', 'webp', 'png', 'jpg', 'jpeg', 'gif', 'svg'];
 
-// Decode a prop value back to a JS value. Numbers / arrays are stored as
-// {type:'expr', value}; strings as {type:'string', value}. Missing → default.
-function decode(value, fallback) {
-  if (value == null) return fallback;
-  if (value.type === 'string') return value.value;
-  if (value.type === 'expr') return value.value;
-  if (value.type === 'bare') return true;
-  return fallback;
-}
-
 // Encode arbitrary JS values back into the prop shape the model expects.
-// Arrays/object literals become expressions; everything else is a string.
+// Arrays become expression literals; everything else is a string attr.
 function encode(v, kind) {
-  if (kind === 'string') return { type: 'string', value: String(v) };
+  if (kind === 'array') return { type: 'expr', value: '[' + v.join(', ') + ']' };
   if (kind === 'number') return { type: 'expr', value: String(v) };
-  if (kind === 'array') return { type: 'expr', value: serializeArray(v) };
-  if (kind === 'raw') return { type: 'expr', value: String(v) };
   return { type: 'string', value: String(v) };
 }
 
-// [400, 800, 1200] → '[400, 800, 1200]'
-function serializeArray(arr) {
-  return '[' + arr.join(', ') + ']';
+// Read a prop value back to a raw string/array. Numbers / arrays are stored
+// as {type:'expr', value}; strings as {type:'string', value}. Missing → default.
+function readProp(value, fallback) {
+  if (value == null) return fallback;
+  if (value.type === 'string' || value.type === 'expr') return value.value;
+  return fallback;
 }
 
-// Editor for widths: a comma-separated list of numbers. Editing each as raw
-// digits keeps the field flat, and the visible string matches what Astro
-// wants in the source.
+// Editor for widths: a comma-separated list of numbers. The raw string keeps
+// the field flat and matches what Astro wants in the source.
 function WidthsField({ value, defaultValue, onChange }) {
-  const raw = value ?? defaultValue;
-  const text = Array.isArray(raw) ? raw.join(', ') : serializeArray(raw);
+  const raw = readProp(value, defaultValue);
+  const text = Array.isArray(raw) ? raw.join(', ') : String(raw);
   const [draft, setDraft] = useState(text);
   const [bad, setBad] = useState(false);
 
   const commit = (next) => {
-    const cleaned = next.split(',').map((s) => s.trim()).filter(Boolean);
-    const nums = cleaned.map((s) => Number(s));
-    if (nums.length === 0 || nums.some((n) => !Number.isFinite(n) || n <= 0)) {
+    const nums = next.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+    if (nums.length === 0 || nums.some((n) => n <= 0)) {
       setBad(true);
       return;
     }
@@ -72,7 +61,7 @@ function WidthsField({ value, defaultValue, onChange }) {
 
 // Multi-select rendered as a row of toggles. Click to toggle, no popup.
 function FormatsField({ value, defaultValue, onChange }) {
-  const raw = value ?? defaultValue;
+  const raw = readProp(value, defaultValue);
   const list = Array.isArray(raw) ? raw : ['avif', 'webp'];
   const toggle = (fmt) => {
     const next = list.includes(fmt) ? list.filter((f) => f !== fmt) : [...list, fmt];
@@ -113,12 +102,13 @@ function FormatsField({ value, defaultValue, onChange }) {
 }
 
 function QualityField({ value, defaultValue, onChange }) {
-  const raw = value?.type === 'expr' ? value.value : value?.value;
-  const n = raw != null ? Number(raw) : defaultValue;
+  const raw = readProp(value, defaultValue);
+  const n = Number(raw);
   const [draft, setDraft] = useState(Number.isFinite(n) ? n : defaultValue);
   const commit = (next) => {
-    if (!Number.isFinite(Number(next)) || Number(next) < 1 || Number(next) > 100) return;
-    onChange(encode(Number(next), 'number'));
+    const num = Number(next);
+    if (!Number.isFinite(num) || num < 1 || num > 100) return;
+    onChange(encode(num, 'number'));
   };
   return (
     <div className="props-field">
@@ -139,23 +129,20 @@ function QualityField({ value, defaultValue, onChange }) {
   );
 }
 
-// Alt text is technically required for accessibility. The warning + border
-// make it impossible to forget — the props panel can render the empty state
-// red so the user knows the preview page would fail an audit.
+// Alt text is required for accessibility. The red border + "(empty —
+// accessibility warning)" line below the field make the empty state
+// impossible to miss in the props panel.
 function AltField({ value, defaultValue, onChange }) {
-  const raw = value?.type === 'expr' ? value.value : value?.value;
-  const v = raw ?? defaultValue ?? '';
+  const raw = readProp(value, defaultValue);
+  const v = raw ?? '';
   const empty = !v.trim();
   return (
     <div className="props-field">
       <label>
-        <span className={`prop-label${empty ? ' set' : ''}`}>
-          Alt
-        </span>
+        <span className="prop-label">Alt</span>
       </label>
       <input
         value={v}
-        spellCheck={true}
         placeholder="Describe the image for screen readers"
         style={empty ? { borderColor: 'var(--red)' } : undefined}
         onChange={(e) => onChange(encode(e.target.value, 'string'))}
@@ -169,9 +156,8 @@ function AltField({ value, defaultValue, onChange }) {
   );
 }
 
-function SimpleField({ name, value, defaultValue, onChange, placeholder, long }) {
-  const raw = value?.type === 'expr' ? value.value : value?.value;
-  const v = raw ?? defaultValue ?? '';
+function TextField({ name, value, placeholder, onChange }) {
+  const v = readProp(value, '');
   return (
     <div className="props-field">
       <label>
@@ -181,18 +167,18 @@ function SimpleField({ name, value, defaultValue, onChange, placeholder, long })
         value={v}
         spellCheck={false}
         placeholder={placeholder}
-        onChange={(e) => onChange(encode(e.target.value, name === 'src' ? 'string' : 'string'))}
+        onChange={(e) => onChange(encode(e.target.value, 'string'))}
       />
     </div>
   );
 }
 
-// Full props UI for an <Image> / <Picture> node. Hosts the fields that don't
-// fit the generic PropField widget (widths list, formats multi-select,
-// quality with a numeric range, the alt-text warning). The page-level
-// fallback note lives at the bottom so the user sees it without scrolling.
-export default function AstroImagePanel({ node, schema, onChange }) {
-  const set = (name, v) => onChange(name, v);
+// Full props UI for an <Image> / <Picture> node. Hosts the bespoke fields
+// that don't fit the generic PropField widget (widths list, formats
+// multi-select, quality with a numeric range, the alt-text warning). The
+// page-level fallback note lives at the bottom so the user sees it without
+// scrolling.
+export default function AstroImagePanel({ node, onChange }) {
   const get = (name) => node.props?.[name];
   const def = (name, fallback) => ASTRO_IMAGE_DEFAULTS[name] ?? fallback;
 
@@ -212,49 +198,49 @@ export default function AstroImagePanel({ node, schema, onChange }) {
         responsive <code>srcset</code> with AVIF/WebP variants.
       </div>
 
-      <SimpleField
+      <TextField
         name="src"
         value={get('src')}
-        onChange={(v) => set('src', v)}
         placeholder="…"
+        onChange={(v) => onChange('src', v)}
       />
       <AltField
         value={get('alt')}
         defaultValue={def('alt', '')}
-        onChange={(v) => set('alt', v)}
+        onChange={(v) => onChange('alt', v)}
       />
       <WidthsField
         value={get('widths')}
         defaultValue={def('widths')}
-        onChange={(v) => set('widths', v)}
+        onChange={(v) => onChange('widths', v)}
       />
-      <SimpleField
+      <TextField
         name="sizes"
         value={get('sizes')}
         placeholder={def('sizes')}
-        onChange={(v) => set('sizes', v)}
+        onChange={(v) => onChange('sizes', v)}
       />
       <FormatsField
         value={get('formats')}
         defaultValue={def('formats')}
-        onChange={(v) => set('formats', v)}
+        onChange={(v) => onChange('formats', v)}
       />
       <QualityField
         value={get('quality')}
         defaultValue={def('quality')}
-        onChange={(v) => set('quality', v)}
+        onChange={(v) => onChange('quality', v)}
       />
-      <SimpleField
+      <TextField
         name="loading"
         value={get('loading')}
         placeholder={def('loading')}
-        onChange={(v) => set('loading', v)}
+        onChange={(v) => onChange('loading', v)}
       />
-      <SimpleField
+      <TextField
         name="decoding"
         value={get('decoding')}
         placeholder={def('decoding')}
-        onChange={(v) => set('decoding', v)}
+        onChange={(v) => onChange('decoding', v)}
       />
 
       <div
@@ -265,8 +251,8 @@ export default function AstroImagePanel({ node, schema, onChange }) {
           lineHeight: 1.5,
         }}
       >
-        If your project doesn't use <code>astro:assets</code>, this renders as
-        a raw <code>&lt;img&gt;</code> with a console warning.
+        If your project doesn't use <code>astro:assets</code>, this renders
+        as a raw <code>&lt;img&gt;</code> with a console warning.
       </div>
     </>
   );

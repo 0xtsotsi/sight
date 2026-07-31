@@ -117,8 +117,6 @@ export default function PropsPanel({
     (node.name === 'Image' || node.name === 'Picture') &&
     builtinComponents.some((c) => c.name === node.name)
   ) {
-    const schema = builtinComponents.find((c) => c.name === node.name).schema;
-    const isLayout = !!isLayout;
     return (
       <div className="panel-section grow" style={{ flex: '1 1 50%', overflow: 'hidden' }}>
         <div className="props-title">
@@ -128,7 +126,6 @@ export default function PropsPanel({
         <div className="panel-body" style={{ padding: 0 }}>
           <AstroImagePanel
             node={node}
-            schema={schema}
             onChange={(name, value) => onSetProp(name, value)}
           />
         </div>

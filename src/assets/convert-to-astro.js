@@ -2,13 +2,20 @@
 // emitted as an Astro <Image> / <Picture> reference in the current page.
 //
 // Flow:
-//   1. moveToSrcAssets — physically relocate the file (public/foo.png →
+//   1. probeImage — read width/height/mime from the still-present public/
+//      file. Must happen BEFORE the move; once moveToSrcAssets runs, the
+//      public/ path is gone and any probe call would be looking at a file
+//      that isn't there.
+//   2. moveToSrcAssets — physically relocate the file (public/foo.png →
 //      src/assets/foo.png). Both old and new paths are marked as self-writes
 //      on the main side so the watcher doesn't reload the page mid-flight.
-//   2. writePage — splice a fresh import and the <Image> tag into the page
-//      source so the user sees the result immediately. Replaces the old
-//      public/ URL with a {importVar} expression wherever it appears.
-//   3. onFsChanged — the watcher already covers src/, but the assets:changed
+//   3. writePage (per matching page) — splice a fresh import and the
+//      <Image> tag into the page source so the user sees the result
+//      immediately. Replaces the old public/ URL with a {importVar}
+//      expression wherever it appears. Best-effort: not every build exposes
+//      listPages, so the rewrite step is skipped cleanly when that's the
+//      case.
+//   4. onFsChanged — the watcher already covers src/, but the assets:changed
 //      event needs a nudge so the Assets panel re-renders without the file.
 //
 // The page is read once, modified in memory, and written back as a single
@@ -68,49 +75,67 @@ function rewritePageWithImage({ pageSource, fileName, publicRel, importName }) {
 export async function convertToAstro({ projectPath, rel, fileName }) {
   if (!window.avb) throw new Error('window.avb is not available');
   if (!window.avb.moveToSrcAssets) throw new Error('moveToSrcAssets is not exposed');
-  if (!window.avb.writePage) throw new Error('writePage is not exposed');
   if (!window.avb.onFsChanged) throw new Error('onFsChanged is not exposed');
 
-  // Step 1: move the file. Throws on collision or missing.
+  // Step 1: probe the still-present public/ file for width/height/mime.
+  // Must run BEFORE moveToSrcAssets — once the move lands, the public/ path
+  // is gone and probeImage would be trying to read a file that isn't there.
+  let probe = null;
+  if (typeof window.avb.probeImage === 'function') {
+    try {
+      probe = await window.avb.probeImage({ projectPath, rel });
+    } catch {
+      probe = null;
+    }
+  }
+  // Fallback so the props panel never has to special-case a missing probe.
+  // 4:3-ish jpeg is a reasonable placeholder for whatever the user uploaded.
+  const dims = probe || { width: 1200, height: 800, mime: 'image/jpeg' };
+
+  // Step 2: move the file. Throws on collision or missing.
   await window.avb.moveToSrcAssets({ projectPath, rel });
 
-  // Step 1b: probe the relocated file's dimensions so the user can drop
-  // a width/height into the props panel without re-measuring.
-  let dims = null;
-  if (window.avb.probeImage) {
-    try {
-      dims = await window.avb.probeImage({ projectPath, rel });
-    } catch {
-      dims = null;
-    }
-  }
-
-  // Step 2: rewrite the open page. We don't know which page the user is
+  // Step 3: rewrite the open page. We don't know which page the user is
   // looking at, so we walk through the recently-edited pages and update
   // each one that references the old public/ URL — best-effort.
+  //
+  // listPages is opt-in: not every build exposes it, and the helper must
+  // not blow up when it's absent. Log once and skip the page rewrite
+  // cleanly so the move still succeeds.
   const importName = IMPORT_NAME(fileName);
-  const pages = (window.avb.listPages ? await window.avb.listPages(projectPath) : []) || [];
-  for (const p of pages) {
-    try {
-      const { source } = await window.avb.readPage({ projectPath, pagePath: p.path });
-      if (!source || !source.includes(`/${rel}`)) continue;
-      const next = rewritePageWithImage({
-        pageSource: source,
-        fileName,
-        publicRel: rel,
-        importName,
-      });
-      if (next !== source) {
-        await window.avb.writePage({ projectPath, pagePath: p.path, source: next });
+  if (typeof window.avb.listPages !== 'function') {
+    console.log('[convertToAstro] listPages not exposed; skipping page rewrite');
+  } else {
+    const pages = (await window.avb.listPages(projectPath)) || [];
+    for (const p of pages) {
+      try {
+        const { source } = await window.avb.readPage({ projectPath, pagePath: p.path });
+        if (!source || !source.includes(`/${rel}`)) continue;
+        const next = rewritePageWithImage({
+          pageSource: source,
+          fileName,
+          publicRel: rel,
+          importName,
+        });
+        if (next !== source) {
+          if (typeof window.avb.writePage !== 'function') {
+            console.log('[convertToAstro] writePage not exposed; skipping page rewrite');
+            break;
+          }
+          await window.avb.writePage({ projectPath, pagePath: p.path, source: next });
+        }
+      } catch {
+        // A page that can't be read or rewritten is left alone; the move still
+        // succeeded, so the user can wire the import by hand.
       }
-    } catch {
-      // A page that can't be read or rewritten is left alone; the move still
-      // succeeded, so the user can wire the import by hand.
     }
   }
 
-  // Step 3: notify the watcher so the Assets panel re-renders.
+  // Step 4: notify the watcher so the Assets panel re-renders.
   window.avb.onFsChanged({ files: [] });
+
+  // Returned so the caller can pre-fill width/height without re-probing.
+  return { dims };
 }
 
 export const __test__ = { IMPORT_NAME, rewritePageWithImage };

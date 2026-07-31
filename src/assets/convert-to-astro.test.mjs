@@ -66,6 +66,10 @@ test('convertToAstro calls moveToSrcAssets, writePage, then onFsChanged, in orde
   const calls = [];
   globalThis.window = {
     avb: {
+      probeImage: async (args) => {
+        calls.push(['probeImage', args]);
+        return { width: 1024, height: 768, mime: 'image/jpeg' };
+      },
       moveToSrcAssets: async (args) => {
         calls.push(['moveToSrcAssets', args]);
         return { ok: true, destRel: 'img/hero.jpg' };
@@ -87,24 +91,34 @@ test('convertToAstro calls moveToSrcAssets, writePage, then onFsChanged, in orde
     rel: 'img/hero.jpg',
     fileName: 'hero.jpg',
   });
-  // Order: move → list → read → write → onFsChanged.
+  // Order: probe → move → list → read → write → onFsChanged.
   const order = calls.map((c) => c[0]);
   assert.deepEqual(order, [
+    'probeImage',
     'moveToSrcAssets',
     'writePage',
     'onFsChanged',
   ]);
-  // Sanity: move was called once with the right args.
-  assert.equal(calls[0][1].rel, 'img/hero.jpg');
-  assert.equal(calls[0][1].projectPath, '/proj');
+  // Sanity: probe was called once with the right args, before move.
+  const probeIdx = order.indexOf('probeImage');
+  const moveIdx = order.indexOf('moveToSrcAssets');
+  assert.ok(probeIdx >= 0 && moveIdx >= 0);
+  assert.ok(probeIdx < moveIdx, 'probeImage must run before moveToSrcAssets');
+  assert.equal(calls[probeIdx][1].rel, 'img/hero.jpg');
+  assert.equal(calls[probeIdx][1].projectPath, '/proj');
+  assert.equal(calls[moveIdx][1].rel, 'img/hero.jpg');
+  assert.equal(calls[moveIdx][1].projectPath, '/proj');
   // The fs-changed ping fires last.
-  assert.equal(calls[2][0], 'onFsChanged');
+  assert.equal(calls[order.length - 1][0], 'onFsChanged');
 });
 
 test('convertToAstro still moves the file even if no page references it', async () => {
   const calls = [];
   globalThis.window = {
     avb: {
+      probeImage: async (args) => {
+        calls.push(['probe', args]);
+      },
       moveToSrcAssets: async (args) => {
         calls.push(['move', args]);
       },
@@ -128,4 +142,134 @@ test('convertToAstro still moves the file even if no page references it', async 
   assert.ok(names.includes('move'));
   assert.ok(!names.includes('write'));
   assert.equal(names[names.length - 1], 'fs');
+});
+
+// --- Bug 1: probe must run BEFORE the move -----------------------
+
+test('convertToAstro calls probeImage BEFORE moveToSrcAssets (probe-before-move ordering)', async () => {
+  const calls = [];
+  globalThis.window = {
+    avb: {
+      // The probe and the move are both mocked to push their own tag into
+      // `calls`. The test asserts that the probe tag lands strictly before
+      // the move tag — which is the property the old buggy implementation
+      // violated by probing AFTER the move (against the now-missing public/
+      // path).
+      probeImage: async (args) => {
+        calls.push('probeImage');
+        return { width: 800, height: 600, mime: 'image/png' };
+      },
+      moveToSrcAssets: async (_args) => {
+        calls.push('moveToSrcAssets');
+        return { ok: true, destRel: 'img/hero.png' };
+      },
+      writePage: async () => {
+        calls.push('writePage');
+      },
+      readPage: async () => ({ source: '<p>noop</p>' }),
+      listPages: async () => [],
+      onFsChanged: () => {
+        calls.push('onFsChanged');
+      },
+    },
+  };
+
+  const result = await convertToAstro({
+    projectPath: '/proj',
+    rel: 'img/hero.png',
+    fileName: 'hero.png',
+  });
+
+  const probeIdx = calls.indexOf('probeImage');
+  const moveIdx = calls.indexOf('moveToSrcAssets');
+  assert.notEqual(probeIdx, -1, 'probeImage must be called');
+  assert.notEqual(moveIdx, -1, 'moveToSrcAssets must be called');
+  assert.ok(
+    probeIdx < moveIdx,
+    `probeImage must be called BEFORE moveToSrcAssets; got call order: ${calls.join(', ')}`
+  );
+  // The move can come at any index after probe; the fs-changed ping must
+  // still be the last call.
+  assert.equal(calls[calls.length - 1], 'onFsChanged');
+  // The dims returned from the probe are surfaced to the caller.
+  assert.deepEqual(result.dims, { width: 800, height: 600, mime: 'image/png' });
+});
+
+// --- Bug 2: missing listPages must be handled gracefully --------
+
+test('convertToAstro skips the page rewrite cleanly when listPages is not exposed', async () => {
+  const calls = [];
+  const originalLog = console.log;
+  const logLines = [];
+  console.log = (line) => logLines.push(line);
+  try {
+    globalThis.window = {
+      avb: {
+        probeImage: async () => {
+          calls.push('probeImage');
+          return { width: 100, height: 100, mime: 'image/jpeg' };
+        },
+        moveToSrcAssets: async () => {
+          calls.push('moveToSrcAssets');
+          return { ok: true };
+        },
+        // No listPages — the IPC method doesn't exist on this build.
+        onFsChanged: () => {
+          calls.push('onFsChanged');
+        },
+      },
+    };
+
+    const result = await convertToAstro({
+      projectPath: '/proj',
+      rel: 'img/foo.jpg',
+      fileName: 'foo.jpg',
+    });
+
+    // Move still happened, fs-changed still fired, no exception thrown.
+    const names = calls;
+    assert.ok(names.includes('moveToSrcAssets'));
+    assert.ok(names.includes('onFsChanged'));
+    // Exactly one explanatory log line, so the skip is visible but not noisy.
+    const skipLogs = logLines.filter((l) => l.includes('listPages not exposed'));
+    assert.equal(skipLogs.length, 1, 'should log exactly one skip line');
+    // Default dims still returned.
+    assert.deepEqual(result.dims, { width: 100, height: 100, mime: 'image/jpeg' });
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test('convertToAstro falls back to sensible dims when probeImage is missing', async () => {
+  globalThis.window = {
+    avb: {
+      // No probeImage at all.
+      moveToSrcAssets: async () => ({ ok: true }),
+      onFsChanged: () => {},
+    },
+  };
+  const result = await convertToAstro({
+    projectPath: '/proj',
+    rel: 'img/x.png',
+    fileName: 'x.png',
+  });
+  assert.deepEqual(result.dims, { width: 1200, height: 800, mime: 'image/jpeg' });
+});
+
+test('convertToAstro falls back to sensible dims when probeImage throws', async () => {
+  globalThis.window = {
+    avb: {
+      probeImage: async () => {
+        throw new Error('decode failed');
+      },
+      moveToSrcAssets: async () => ({ ok: true }),
+      onFsChanged: () => {},
+    },
+  };
+  const result = await convertToAstro({
+    projectPath: '/proj',
+    rel: 'img/x.png',
+    fileName: 'x.png',
+  });
+  assert.deepEqual(result.dims, { width: 1200, height: 800, mime: 'image/jpeg' });
 });
