@@ -22,6 +22,7 @@ import EasingEditor from './EasingEditor'
 import { parseTransitions, serializeTransitions, blankTransition, transitionLabel, easingToBezier, TRANSITION_GROUPS, type Transition } from './lib/transition'
 import { parseFilters, serializeFilters, blankFilter, filterLabel, type Filter } from './lib/filter'
 import FilterEditor from './FilterFields'
+import ScrollAnimationsSection from './ScrollAnimations'
 
 // The Effects section (Webflow parity): blending, opacity, outline, box shadows,
 // transforms, transitions, filters, backdrop filters, cursor, and pointer-events.
@@ -990,6 +991,7 @@ export default function EffectsSection(props: Props) {
       <BoxShadowsRow props={props} />
       <TransformsRow props={props} />
       <TransitionsRow props={props} />
+      <ScrollAnimationsSection read={props.read} busy={props.busy} setProp={props.setProp} clearProp={props.clearProp} liveSetProp={props.liveSetProp} />
       <FiltersRow prop="filter" label="Filters" props={props} />
       <FiltersRow prop="backdrop-filter" label="Backdrop filters" props={props} />
 
