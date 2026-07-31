@@ -13,14 +13,68 @@ if (!process.isMainFrame) {
       script.id = 'sight-axe-core';
       script.src = 'file://' + __dirname + '/node_modules/axe-core/axe.min.js';
       script.onload = () => {
-        window.addEventListener('sight:a11y:run', async () => {
-          try { const result = await window.axe.run(document); window.parent.postMessage({ type: 'sight:a11y', results: result }, '*'); } catch (error) { window.parent.postMessage({ type: 'sight:a11y', error: String(error) }, '*'); }
-        });
-        window.parent.postMessage({ type: 'sight:a11y:ready' }, '*');
+        // Vite HMR swaps <style> tags and component chunks under the preview;
+        // a 500ms debounce collapses a burst of edits into one audit. Without
+        // this the badge would re-score on every keystroke in the canvas.
+        let runTimer = null;
+        const sendError = (msg) => ipcRenderer.send('a11y:results', { error: String(msg) });
+        const runAudit = async () => {
+          try {
+            const result = await window.axe.run(document, { resultTypes: ['violations', 'passes', 'incomplete'] });
+            ipcRenderer.send('a11y:results', { results: result });
+          } catch (error) {
+            sendError(error);
+          }
+        };
+        const scheduleRun = () => {
+          clearTimeout(runTimer);
+          runTimer = setTimeout(runAudit, 500);
+        };
+        // Manual trigger from the parent (axe loaded but the page might still
+        // be settling on first paint).
+        window.addEventListener('sight:a11y:run', runAudit);
+        if (window.MutationObserver) {
+          new MutationObserver(scheduleRun).observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            characterData: true,
+          });
+        }
+        // First run after axe loads + a tick for the page to settle.
+        setTimeout(runAudit, 100);
       };
       (document.head || document.documentElement).appendChild(script);
     };
     if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', injectA11y); else injectA11y();
+
+    // Click-to-fix: parent asks us to resolve a CSS selector to a path.
+    // The iframe is cross-origin from the renderer (Astro dev server vs Vite),
+    // so we exchange messages via window.postMessage. Each request carries
+    // an id so concurrent calls don't get their answers crossed.
+    window.addEventListener('message', (e) => {
+      if (e.source !== window.parent) return;
+      const d = e.data;
+      if (d?.type !== 'sight:resolve-selector') return;
+      if (typeof d.selector !== 'string' || typeof d.requestId !== 'number') return;
+      let path = null;
+      let tag = null;
+      let html = '';
+      try {
+        const el = document.querySelector(d.selector);
+        if (el) {
+          path = el.getAttribute('data-avb-p');
+          tag = el.tagName ? el.tagName.toLowerCase() : null;
+          html = el.outerHTML ? el.outerHTML.slice(0, 200) : '';
+        }
+      } catch {
+        /* invalid selector — leave path null */
+      }
+      window.parent.postMessage(
+        { type: 'sight:resolve-selector:result', requestId: d.requestId, path, tag, html },
+        '*'
+      );
+    });
   }
   // Design-mode frames (canvas + editor preview) are marked with #avb-design.
   // They get an editor cursor (no I-beam over text) and links/forms are

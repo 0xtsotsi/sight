@@ -484,7 +484,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const off = window.avb.onA11yResults((data) => { if (data?.results) setA11yResults(data.results); });
+    const off = window.avb.onA11yResults((data) => {
+      // Main pushes the normalized result on every fresh audit; the panel
+      // expects the panel-shaped object (with violations[] + score), so we
+      // pass the whole payload through.
+      if (data) setA11yResults(data);
+    });
     return off;
   }, []);
 
@@ -493,6 +498,45 @@ export default function App() {
     const timer = setTimeout(() => window.avb.runA11yAudit().then(setA11yResults).catch(() => {}), 500);
     return () => clearTimeout(timer);
   }, [devUrl, refreshKey]);
+
+  // Click-to-fix: the axe selector needs to be resolved to a model node id
+  // so the navigator can scroll to it. The preview iframe is cross-origin
+  // (Astro dev server vs Vite), so we can't query it from the parent — we
+  // postMessage it and let the sub-frame's preload read data-avb-p off the
+  // matching element.
+  const resolveCounterRef = useRef(0);
+  const resolveSelector = useCallback((selector) => {
+    return new Promise((resolve) => {
+      const requestId = ++resolveCounterRef.current;
+      let done = false;
+      const finish = (path) => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('message', handler);
+        clearTimeout(timer);
+        resolve(path || null);
+      };
+      const handler = (e) => {
+        const d = e.data;
+        if (d?.type !== 'sight:resolve-selector:result' || d.requestId !== requestId) return;
+        finish(d.path);
+      };
+      const timer = setTimeout(() => finish(null), 2000);
+      window.addEventListener('message', handler);
+      // The canvas iframe is the one with #avb-design in its src; the
+      // interactive preview is a different overlay iframe and shouldn't
+      // answer a11y lookups.
+      const iframe = document.querySelector('iframe[src*="#avb-design"]');
+      if (!iframe?.contentWindow) {
+        finish(null);
+        return;
+      }
+      iframe.contentWindow.postMessage(
+        { type: 'sight:resolve-selector', requestId, selector },
+        '*'
+      );
+    });
+  }, []);
 
   // ----------------------------------------------------------------
   // Project lifecycle
@@ -2359,9 +2403,33 @@ export default function App() {
           results={a11yResults}
           open={a11yOpen}
           onClose={() => setA11yOpen(false)}
-          onFix={(violation) => {
-            const node = violation.targets?.[0]?.selector;
-            if (node) { setA11yOpen(false); setRightTab('settings'); }
+          onFix={async (violation) => {
+            const selector = violation?.targets?.[0]?.selector;
+            if (!selector) {
+              setA11yOpen(false);
+              setRightTab('settings');
+              return;
+            }
+            const path = await resolveSelector(selector);
+            setA11yOpen(false);
+            if (path) {
+              const trail = path.split('.').map(Number);
+              const n = model && nodeAtPath(model.nodes, trail);
+              if (n) {
+                setSelectedId(n.id);
+                setLeftTab('navigator');
+                setRevealTick((t) => t + 1);
+                // Rules with a fix-template (image-alt, color-contrast, …)
+                // get the props panel so the user can apply the fix there.
+                if (violation.fixTemplate) setRightTab('settings');
+                return;
+              }
+            }
+            showToast(
+              `Couldn't locate the element for that violation on the canvas — open the Props panel to fix it manually.`,
+              'info'
+            );
+            setRightTab('settings');
           }}
         />
 

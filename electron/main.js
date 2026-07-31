@@ -175,7 +175,10 @@ function buildMenu() {
 
 // Native clipboard actions on the focused element, requested by the renderer
 // when a menu Copy/Paste lands while a text field has focus.
-ipcMain.handle('a11y:runAudit', (event) => lastAuditResults.get(event.sender.id) || { violations: [], passes: 0, incomplete: 0, score: 0 });
+ipcMain.handle('a11y:runAudit', (event) => {
+  const cached = lastAuditResults.get(event.sender.id);
+  return cached || { results: [], violations: [], passes: 0, incomplete: 0, score: null, lastRunAt: null };
+});
 ipcMain.handle('a11y:setRuleOverrides', async (event, { projectPath, overrides } = {}) => {
   if (!projectPath) throw new Error('Project path is required');
   const dir = path.join(projectPath, '.sight');
