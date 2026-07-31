@@ -8,6 +8,7 @@ const {
   protocol,
   net: enet,
   nativeImage,
+  safeStorage,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -17,20 +18,13 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 
-const {
-  parsePage,
-  serializePage,
-  parseTemplate,
-  serializeNodes,
-  resolveChunks,
-  parsePropSchema,
-  parseExtendsTag,
-  parseSlots,
-} = require('./astroParser');
 const { scaffoldProject } = require('./scaffold');
 const { importersOf } = require('./cmsRefs');
 const agentCredential = require('./agentCredential');
 const { register: registerDeployIpc } = require('./deploy/ipc');
+const { applyPatchToFile, validatePatch } = require('./ai/apply');
+const { getProvider } = require('./ai/providers/registry');
+const { serializeNodeToJson } = require('./astroParser');
 const { autoUpdater } = require('electron-updater');
 const { normalizeAuditResults } = require('./a11y/audit');
 
@@ -2579,6 +2573,129 @@ ipcMain.handle('git:publish', async (_e, { projectPath, repoName, isPrivate }) =
   }
   if (url) url = url.replace(/[.,)]+$/, '').replace(/\.git$/, '');
   return { ok: true, url, output };
+});
+
+// ---------------------------------------------------------------------------
+// AI inline-edit (Feature 8 of the Sight expand plan)
+//
+// BYOK providers: Anthropic, OpenAI, and local Ollama. API keys never leave
+// the main process — the renderer only sees a boolean "has key for X". Keys
+// live in safeStorage (encrypted with the OS keychain on macOS / DPAPI on
+// Windows) and a per-provider in-memory cache so we don't decrypt on every
+// patch. The renderer never receives the key value, never sees it in
+// error messages, and never logs it.
+// ---------------------------------------------------------------------------
+
+const aiKeys = new Map(); // provider id -> Buffer (safeStorage-encrypted)
+const aiProviderList = [
+  { id: 'anthropic', label: 'Anthropic Claude', requiresKey: true, endpoint: 'https://api.anthropic.com' },
+  { id: 'openai',    label: 'OpenAI',           requiresKey: true, endpoint: 'https://api.openai.com/v1' },
+  { id: 'ollama',    label: 'Ollama (local)',   requiresKey: false, endpoint: 'http://127.0.0.1:11434' },
+];
+
+function aiDecryptKey(enc) {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    return safeStorage.decryptString(enc).toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+ipcMain.handle('ai:providers', async () => aiProviderList.map((p) => ({ ...p })));
+
+ipcMain.handle('ai:hasKey', async (_e, providerId) => {
+  return aiKeys.has(providerId);
+});
+
+ipcMain.handle('ai:setKey', async (_e, { providerId, key }) => {
+  if (typeof key !== 'string' || !key) return { ok: false, error: 'No key provided.' };
+  if (!safeStorage.isEncryptionAvailable()) {
+    // No OS keychain — fall back to an in-memory only store, never persisted.
+    aiKeys.set(providerId, Buffer.from('plain:' + key, 'utf8'));
+    return { ok: true, encrypted: false };
+  }
+  try {
+    const enc = safeStorage.encryptString(key);
+    aiKeys.set(providerId, enc);
+    return { ok: true, encrypted: true };
+  } catch (err) {
+    return { ok: false, error: 'Could not encrypt API key.' };
+  }
+});
+
+ipcMain.handle('ai:clearKey', async (_e, providerId) => {
+  aiKeys.delete(providerId);
+  return { ok: true };
+});
+
+ipcMain.handle('ai:editNode', async (_e, args) => {
+  const { projectPath, pagePath, nodeId, instruction, model, provider } = args || {};
+  if (!pagePath || !nodeId || !instruction || !provider) {
+    return { ok: false, error: 'Missing required arguments.' };
+  }
+  const meta = aiProviderList.find((p) => p.id === provider);
+  if (!meta) return { ok: false, error: 'Unknown provider.' };
+  let key;
+  if (meta.requiresKey) {
+    const enc = aiKeys.get(provider);
+    if (!enc) return { ok: false, error: 'No API key configured for ' + meta.label + '.' };
+    key = aiDecryptKey(enc);
+    if (!key) return { ok: false, error: 'Could not decrypt API key.' };
+  }
+  // Locate the node from the on-disk source so we pass the live AST to the
+  // provider (and validate the patch against it, never against stale state).
+  let parsed;
+  try {
+    parsed = parsePage(require('fs').readFileSync(pagePath, 'utf8'));
+  } catch (err) {
+    return { ok: false, error: 'Could not read page: ' + (err?.message || String(err)) };
+  }
+  if (!parsed || !parsed.editable) {
+    return { ok: false, error: 'This page is not editable; edits fall through to the code editor.' };
+  }
+  const { locateNode } = require('./ai/apply');
+  const located = locateNode(parsed.model.nodes, nodeId);
+  if (!located) return { ok: false, error: 'Node no longer exists on this page.' };
+  const node = located.node;
+  const nodeJson = serializeNodeToJson(node);
+  // Call the provider. Provider streamPatch yields patch events.
+  let providerImpl;
+  try {
+    providerImpl = getProvider(provider, { apiKey: key, model, endpoint: meta.endpoint });
+  } catch (err) {
+    return { ok: false, error: 'Provider not available: ' + (err?.message || String(err)) };
+  }
+  let patch;
+  try {
+    for await (const ev of providerImpl.streamPatch({ node: nodeJson, instruction })) {
+      if (ev.type === 'patch' && ev.patch) {
+        patch = ev.patch;
+      } else if (ev.type === 'error') {
+        return { ok: false, error: ev.message || 'Provider error.' };
+      }
+    }
+  } catch (err) {
+    return { ok: false, error: 'Provider call failed.' };
+  }
+  if (!patch) return { ok: false, error: 'No patch returned by provider.' };
+  const valid = validatePatch(patch, node);
+  if (!valid.ok) return { ok: false, error: valid.error, patch };
+  // Apply via the normal write path with markSelfWrite so the watcher
+  // doesn't bounce the change back at us as an external edit.
+  const absPage = path.resolve(pagePath);
+  markSelfWrite(absPage);
+  const result = applyPatchToFile({
+    pagePath,
+    nodeId,
+    patch,
+    readFile: (p) => require('fs').readFileSync(p, 'utf8'),
+    writeFile: (p, src) => {
+      markSelfWrite(path.resolve(p));
+      require('fs').writeFileSync(p, src, 'utf8');
+    },
+  });
+  return result;
 });
 
 ipcMain.handle('shell:openExternal', async (_e, url) => {

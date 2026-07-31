@@ -2528,9 +2528,25 @@ export default function App() {
               onSetContent={(value) => setNodeContent(selectedId, value)}
               onSetInline={(kids) => setNodeInline(selectedId, kids)}
               onOpenCode={openCodeWindow}
+              onAiEdit={() => { setRightTab('settings'); setAiOpen(true); }}
               projectPath={project.path}
             />
             </div>
+            <div style={{ display: rightTab === 'ai' ? 'contents' : 'none' }}>
+              <SettingsAi showToast={showToast} />
+            </div>
+            {aiOpen && (
+              <AiPanel
+                open={aiOpen}
+                onClose={() => setAiOpen(false)}
+                selectedNode={selectedNode}
+                selectedId={selectedId}
+                project={project}
+                pagePath={currentPage?.path}
+                showToast={showToast}
+                onApplied={() => setRefreshKey((k) => k + 1)}
+              />
+            )}
           </div>
         )}
       </div>

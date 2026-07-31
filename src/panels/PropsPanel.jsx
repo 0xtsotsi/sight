@@ -50,6 +50,7 @@ export default function PropsPanel({
   onSetContent,
   onSetInline,
   onOpenCode,
+  onAiEdit,
   projectPath,
 }) {
   if (!node) {
@@ -247,6 +248,16 @@ export default function PropsPanel({
         )}
         {isLayout ? currentLayoutName || node.name : node.name}
         {isLayout && <span className="badge">layout</span>}
+        {onAiEdit && (
+          <button
+            className="ghost ai-edit-trigger"
+            onClick={() => onAiEdit()}
+            title="Edit with AI (⌘J)"
+            aria-label="Edit with AI"
+          >
+            ✨
+          </button>
+        )}
       </div>
       <div className="panel-body" style={{ padding: 0 }}>
         {node.kind === 'element' && onChangeTag && (

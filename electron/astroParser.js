@@ -384,6 +384,11 @@ function collapseWhitespace(text) {
 // (if any) stays in the tree as a regular node with the well-known id
 // 'layout', so nodes can live before/after it at the top level.
 function parsePage(source) {
+  // Reset the id counter so calls are deterministic — the previous
+  // nextId value may have been bumped by a prior parsePage invocation,
+  // which produced different ids on every call and broke anything that
+  // captured a node id and then re-parsed the same source to look it up.
+  nextId = 1;
   const fm = source.match(/^---\r?\n(?:([\s\S]*?)\r?\n)?---\r?\n?/);
   const frontmatter = fm ? fm[1] || '' : '';
   const body = fm ? source.slice(fm[0].length) : source;
@@ -767,6 +772,37 @@ function serializeNodes(nodes) {
   return lines.join('\n') + '\n';
 }
 
+
+
+// Serialize a node (and its subtree) to a plain JSON object suitable for
+// sending to an AI model. AttrValues are flattened to primitive strings so
+// the model sees a stable JSON shape, and chunk-file children (which are
+// stored in external .html files, not the model) are omitted. Used by the
+// AI inline-edit feature to give the model structured context.
+function serializeNodeToJson(node) {
+  if (node == null) return null;
+  const out = { id: node.id, kind: node.kind };
+  if (node.kind === 'element' || node.kind === 'component' || node.kind === 'raw') {
+    out.name = node.name;
+    out.props = {};
+    for (const k of Object.keys(node.props || {})) {
+      const v = node.props[k];
+      out.props[k] = v && typeof v === 'object' && 'value' in v ? v.value : v;
+    }
+    if (node.frontmatter) out.frontmatter = { ...node.frontmatter };
+  }
+  if (node.kind === 'text' || node.kind === 'expr' || node.kind === 'comment' || node.kind === 'raw-line') {
+    out.value = node.value;
+  }
+  if (node.kind === 'map') {
+    out.head = node.head;
+    out.children = (node.children || []).map(serializeNodeToJson);
+  } else if (node.kind === 'element' || node.kind === 'component') {
+    out.children = (node.children || []).map(serializeNodeToJson);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // HTML chunks
 // ---------------------------------------------------------------------------
@@ -905,4 +941,5 @@ module.exports = {
   parseSlots,
   parseAttrs,
   serializeAttrs,
+  serializeNodeToJson,
 };
