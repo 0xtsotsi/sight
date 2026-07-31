@@ -47,6 +47,10 @@ const SCHEMAS = {
     { name: 'action', type: 'string' },
     { name: 'method', type: 'enum', options: ['get', 'post', 'dialog'], default: 'get' },
   ],
+  dialog: [
+    { name: 'open', type: 'boolean', default: false },
+    { name: 'closedby', type: 'enum', options: ['none', 'any', 'closerequest', 'auto'], default: 'none' },
+  ],
   img: [
     { name: 'src', type: 'string' },
     { name: 'alt', type: 'string' },
@@ -187,4 +191,5 @@ export function canContainTag(parentTag, childTag) {
 export const GLOBAL_ATTRS = new Set([
   'class', 'id', 'style', 'slot', 'title', 'role', 'tabindex', 'hidden',
   'dir', 'lang', 'draggable', 'is', 'part', 'autofocus', 'inert',
+  'popover', 'popovertarget', 'popovertargetaction', 'command', 'commandfor',
 ]);
