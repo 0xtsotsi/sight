@@ -1433,8 +1433,26 @@ ipcMain.handle('cms:create', async (_e, { projectPath, name }) => {
 // from a line of text — or anything at all from an empty field. Types the user
 // picked explicitly are remembered here, keyed by collection and field path.
 const cmsMetaPath = (projectPath) => path.join(projectPath, '.sight', 'cms.json');
+// Pre-rebrand (Stacki) used .stacki/cms.json. Migrate a user's existing file
+// once so their CMS type choices survive the upgrade. Best-effort: failures
+// here should never break a read, so we swallow everything.
+const legacyCmsMetaPath = (projectPath) => path.join(projectPath, '.stacki', 'cms.json');
+
+function migrateLegacyCmsMeta(projectPath) {
+  const legacy = legacyCmsMetaPath(projectPath);
+  const target = cmsMetaPath(projectPath);
+  try {
+    if (fs.existsSync(legacy) && !fs.existsSync(target)) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(legacy, target);
+    }
+  } catch {
+    /* best-effort: read/write failures are handled by callers */
+  }
+}
 
 function readCmsMeta(projectPath) {
+  migrateLegacyCmsMeta(projectPath);
   try {
     return JSON.parse(fs.readFileSync(cmsMetaPath(projectPath), 'utf8'));
   } catch {

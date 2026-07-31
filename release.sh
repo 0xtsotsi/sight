@@ -28,12 +28,14 @@ npm version "$new" --no-git-tag-version
 
 echo "Bumped to $new"
 
-# Commit, tag, and push
+# Commit, tag, and push to this fork's origin (not upstream).
+# Explicit `origin` so a misconfigured remote can't route the tag to
+# flowtricks/stacki; the pre-push hook is the backstop.
 git add -A
 git commit -m "v$new"
 git tag "v$new"
-git push
-git push --tags
+git push origin
+git push origin --tags
 
 echo "Release v$new triggered!"
 # Removed: this fork doesn't push to or watch upstream CI.
