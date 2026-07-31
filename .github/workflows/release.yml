@@ -85,7 +85,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          assets=$(gh release view "$TAG" --repo flowtricks/stacki-releases \
+          assets=$(gh release view "$TAG" --repo 0xtsotsi/sight-releases \
             --json assets --jq '[.assets[].name] | join(" ")')
           echo "assets: $assets"
           for required in latest-mac.yml latest.yml; do
@@ -94,4 +94,4 @@ jobs:
               *) echo "missing $required — refusing to publish"; exit 1 ;;
             esac
           done
-          gh release edit "$TAG" --repo flowtricks/stacki-releases --draft=false --latest
+          gh release edit "$TAG" --repo 0xtsotsi/sight-releases --draft=false --latest

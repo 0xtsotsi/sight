@@ -437,13 +437,13 @@ function DevOffline({ devLog, devDiag, onRestart }) {
   if (kind === 'no-node') {
     title = "Node.js isn't installed — or isn't where this app can see it.";
     detail =
-      'Astro needs Node.js to run. Stacki looks on the system path, your login ' +
+      'Astro needs Node.js to run. Sight looks on the system path, your login ' +
       "shell's path, and the usual Homebrew, nvm, fnm, volta, asdf and mise " +
       'locations, and found nothing. Install Node, then start the server again.';
     action = { label: 'Get Node.js', url: NODE_URL };
   } else if (kind === 'node-too-old') {
     title = `Node ${devDiag.nodeVersion} is too old for this project.`;
-    detail = `astro ${devDiag.astroVersion} needs Node ${devDiag.requires}. Install a newer Node — if you use a version manager, the one it picks in this project's folder is the one Stacki will use.`;
+    detail = `astro ${devDiag.astroVersion} needs Node ${devDiag.requires}. Install a newer Node — if you use a version manager, the one it picks in this project's folder is the one Sight will use.`;
     action = { label: 'Get Node.js', url: NODE_URL };
   } else if (kind === 'no-deps') {
     title = "This project's dependencies aren't installed.";

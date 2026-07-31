@@ -118,7 +118,7 @@ export default function GitChip({ project, showToast, flushSave, onWorktreeChang
         onStep('Committing changes…');
         await window.avb.gitCommit({
           projectPath: project.path,
-          message: 'Initial commit from Stacki',
+          message: 'Initial commit from Sight',
         });
       }
       onStep('Creating repository and pushing…');
@@ -156,7 +156,7 @@ export default function GitChip({ project, showToast, flushSave, onWorktreeChang
   }
 
   const commit = () => {
-    const message = commitMsg.trim() || 'Update from Stacki';
+    const message = commitMsg.trim() || 'Update from Sight';
     setCommitMsg('');
     act(
       () => window.avb.gitCommit({ projectPath: project.path, message }),

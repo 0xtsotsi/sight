@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Refuse to push to flowtricks/* (the upstream fork we must not contribute back to).
+# This fork only pulls from upstream, never pushes or opens PRs against it.
+set -euo pipefail
+
+while read -r local_ref local_sha remote_ref remote_url; do
+  case "$remote_url" in
+    *flowtricks/*)
+      echo "✗ refusing push to upstream: $remote_url" >&2
+      echo "  This fork only pulls from flowtricks/stacki." >&2
+      echo "  Push to origin (0xtsotsi/sight) instead." >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0

@@ -40,7 +40,7 @@ interface Props {
   title?: string;
   description?: string;
 }
-const { title = 'My Site', description = 'Built with Stacki' } = Astro.props;
+const { title = 'My Site', description = 'Built with Sight' } = Astro.props;
 ---
 <html lang="en">
   <head>

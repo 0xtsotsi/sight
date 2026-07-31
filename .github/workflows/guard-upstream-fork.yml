@@ -1,0 +1,53 @@
+name: Guard upstream fork
+# Fails CI if anything tries to push code back to flowtricks/* (upstream).
+# Local pre-push hook enforces this on the developer's machine; this is the
+# belt-and-braces backup in case the hook is bypassed.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify no push ref targets upstream
+        run: |
+          set -euo pipefail
+          bad=0
+          # GitHub Actions exposes the triggering ref/remote; check both
+          # push events (the push URL we used) and PR events (head repo).
+          if [ "${{ github.event_name }}" = "push" ]; then
+            remote_url="${{ github.event.repository.url }}"
+            case "$remote_url" in
+              *flowtricks/*)
+                echo "✗ push came from upstream fork: $remote_url"
+                bad=1
+                ;;
+              *)
+                echo "✓ push came from this fork: $remote_url"
+                ;;
+            esac
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            head_repo="${{ github.event.pull_request.head.repo.full_name }}"
+            case "$head_repo" in
+              flowtricks/*)
+                echo "✗ PR head is on upstream: $head_repo"
+                bad=1
+                ;;
+              *)
+                echo "✓ PR head is on this fork: $head_repo"
+                ;;
+            esac
+          fi
+
+          exit "$bad"

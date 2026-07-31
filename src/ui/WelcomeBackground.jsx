@@ -1,7 +1,7 @@
 // Interactive WebGL backdrop for the start screen: a shader-drawn wave that
 // bends around the cursor. Mouse movement injects velocity into a 64x64
 // field, which is blurred, decayed, and uploaded as a texture the shader
-// samples to displace its UVs. Ported from the Stacki prototype.
+// samples to displace its UVs. Ported from the Sight prototype.
 import { useEffect, useRef } from 'react'
 
 const FIELD_SIZE = 64
