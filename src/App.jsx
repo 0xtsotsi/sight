@@ -22,6 +22,7 @@ import A11yPanel from './panels/A11yPanel.jsx';
 
 import ContentPanel from './panels/ContentPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
+import { builtinComponents } from './elementSchemas/astro-image.js';
 import { onAssetRequest, clearAssetRequest } from './assetPick.js';
 import { isDataBound } from './bindings.js';
 import {
@@ -399,8 +400,11 @@ export default function App() {
   // know about the component named X" has to search both lists, or a placed
   // layout would come back with no props, no slots and no rest support.
   // Components win a name collision: they're the more likely intent.
+  // Built-ins come from virtual imports (e.g. astro:assets) and have no
+  // .astro file on disk — they live in src/elementSchemas/astro-image.js so
+  // the props panel can still show their bespoke fields.
   const insertables = useMemo(
-    () => [...scan.components, ...scan.layouts],
+    () => [...builtinComponents, ...scan.components, ...scan.layouts],
     [scan.components, scan.layouts]
   );
 
@@ -913,19 +917,33 @@ export default function App() {
       const comp = insertables.find((c) => c.name === componentName);
       const page = pageStateRef.current.currentPage;
       if (!comp || !page) return;
-      const paths = await resolveImportPath(comp.path);
       const id = newId();
-      mutateModel((model) => {
-        if (!model.imports.some((i) => i.name === comp.name)) {
-          model.imports.push({
-            name: comp.name,
-            path: chooseImportPath(model, paths),
-          });
-        }
-        const node = { id, kind: 'component', name: comp.name, props: {}, children: null };
-        insertIntoModel(model, node, target);
-        return model;
-      }, true);
+      if (comp.isBuiltin) {
+        // Virtual components (astro:assets Image/Picture) have no file on
+        // disk; the import path is fixed and the parser already recognises
+        // <Image>/<Picture> as built-ins. Just splice the node in.
+        mutateModel((model) => {
+          if (!model.imports.some((i) => i.name === comp.name)) {
+            model.imports.push({ name: comp.name, path: comp.importPath });
+          }
+          const node = { id, kind: 'component', name: comp.name, props: {}, children: null };
+          insertIntoModel(model, node, target);
+          return model;
+        }, true);
+      } else {
+        const paths = await resolveImportPath(comp.path);
+        mutateModel((model) => {
+          if (!model.imports.some((i) => i.name === comp.name)) {
+            model.imports.push({
+              name: comp.name,
+              path: chooseImportPath(model, paths),
+            });
+          }
+          const node = { id, kind: 'component', name: comp.name, props: {}, children: null };
+          insertIntoModel(model, node, target);
+          return model;
+        }, true);
+      }
       setSelectedId(id);
     },
     [insertables, mutateModel, resolveImportPath]

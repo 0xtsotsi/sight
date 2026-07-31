@@ -23,6 +23,16 @@ const VOID_ELEMENTS = new Set([
 ]);
 const RAW_ELEMENTS = new Set(['style', 'script']);
 
+// Built-in components that come from a virtual import (no .astro file on disk)
+// and so never appear in the page's IMPORT_RE matches. Treating them as
+// components instead of dynamic tags is what lets the props panel show their
+// schema; treating them as dynamic tags would strip the schema and the user
+// would only see the raw attribute fields.
+const BUILTIN_COMPONENTS = new Set([
+  'Image', // from 'astro:assets'
+  'Picture', // from 'astro:assets'
+]);
+
 let nextId = 1;
 const makeId = () => `n${nextId++}`;
 
@@ -442,7 +452,7 @@ function parsePage(source) {
   // they have no file to open and no props of their own.
   const markDynamic = (list) => {
     for (const n of list) {
-      if (n.kind === 'component' && !importsByName[n.name]) n.dynamicTag = true;
+      if (n.kind === 'component' && !importsByName[n.name] && !BUILTIN_COMPONENTS.has(n.name)) n.dynamicTag = true;
       if (Array.isArray(n.children)) markDynamic(n.children);
     }
   };

@@ -10,6 +10,8 @@ import ExprInput from '../ui/ExprInput.jsx';
 import RichContent, { isInlineOnly } from '../ui/RichContent.jsx';
 import AssetField from '../ui/AssetField.jsx';
 import { looksLikeAssetPath, mediaKindFor } from '../ui/AssetThumb.jsx';
+import AstroImagePanel from './AstroImagePanel.jsx';
+import { builtinComponents } from '../elementSchemas/astro-image.js';
 import { dataSuggestions, exprSuggestions } from '../dataSuggest.js';
 import LinkField from '../ui/LinkField.jsx';
 import {
@@ -101,6 +103,33 @@ export default function PropsPanel({
             value={node.value}
             syncValue={node.value}
             onCommit={(v) => v !== node.value && onSetText(v)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Built-in components (astro:assets Image / Picture) get their own
+  // bespoke panel — they have widths/sizes/formats/quality/alt fields that
+  // don't fit the generic PropField widget.
+  if (
+    node.kind === 'component' &&
+    (node.name === 'Image' || node.name === 'Picture') &&
+    builtinComponents.some((c) => c.name === node.name)
+  ) {
+    const schema = builtinComponents.find((c) => c.name === node.name).schema;
+    const isLayout = !!isLayout;
+    return (
+      <div className="panel-section grow" style={{ flex: '1 1 50%', overflow: 'hidden' }}>
+        <div className="props-title">
+          <ElementImageIcon size={16} className="props-title-icon" />
+          {node.name}
+        </div>
+        <div className="panel-body" style={{ padding: 0 }}>
+          <AstroImagePanel
+            node={node}
+            schema={schema}
+            onChange={(name, value) => onSetProp(name, value)}
           />
         </div>
       </div>

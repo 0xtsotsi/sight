@@ -612,6 +612,8 @@ contextBridge.exposeInMainWorld('avb', {
   moveAsset: invoke('assets:move'),
   renameAsset: invoke('assets:rename'),
   mkdirAssets: invoke('assets:mkdir'),
+  moveToSrcAssets: invoke('assets:toSrcAssets'),
+  probeImage: invoke('assets:probeImage'),
   readAssetText: invoke('assets:readText'),
   writeAssetText: invoke('assets:writeText'),
   // OS drag-and-drop: resolve a DOM File to its filesystem path.
