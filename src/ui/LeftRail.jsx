@@ -13,6 +13,10 @@ const TABS = [
   { id: 'components', title: 'Components', shortcut: '⇧A', Icon: ComponentFillIcon },
   { id: 'assets', title: 'Assets', shortcut: 'J', Icon: AssetManagerIcon },
   { id: 'cms', title: 'CMS', shortcut: '⌥C', Icon: CmsIcon },
+  // Content collections slot — sits next to the CMS tab so the two editors
+  // share the rail. The CodeMirror MDX editor (FormFromSchema + MdxEditor)
+  // ships in a follow-up; the MVP shows frontmatter as JSON + the raw body.
+  { id: 'content', title: 'Content', shortcut: '⌥M', Icon: CmsIcon },
 ];
 
 const TOOLTIP_DELAY = 500;

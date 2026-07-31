@@ -19,6 +19,8 @@ import AssetsPanel from './panels/AssetsPanel.jsx';
 import CmsPanel from './panels/CmsPanel.jsx';
 import CmsView from './panels/CmsView.jsx';
 import A11yPanel from './panels/A11yPanel.jsx';
+
+import ContentPanel from './panels/ContentPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
 import { onAssetRequest, clearAssetRequest } from './assetPick.js';
 import { isDataBound } from './bindings.js';
@@ -355,7 +357,7 @@ export default function App() {
   const [busy, setBusy] = useState(null); // string message
   const [toast, setToast] = useState(null); // {msg, kind}
   const [refreshKey, setRefreshKey] = useState(0);
-  const [leftTab, setLeftTab] = useState('navigator'); // pages | navigator | components | assets | cms | null
+  const [leftTab, setLeftTab] = useState('navigator'); // pages | navigator | components | assets | cms | content | null
   const [cmsRel, setCmsRel] = useState(null); // JSON file open in the CMS editor
   const [cmsTick, setCmsTick] = useState(0); // bumped on save, refreshes counts
   const [cmsSettings, setCmsSettings] = useState(false); // editing that collection's fields
@@ -2304,6 +2306,12 @@ export default function App() {
                   setCmsRel(r);
                   setCmsSettings(true);
                 }}
+                showToast={showToast}
+              />
+            )}
+            {leftTab === 'content' && (
+              <ContentPanel
+                project={project}
                 showToast={showToast}
               />
             )}

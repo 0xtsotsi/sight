@@ -637,6 +637,13 @@ contextBridge.exposeInMainWorld('avb', {
   cmsUsage: invoke('cms:usage'),
   cmsMeta: invoke('cms:meta'),
   setCmsMeta: invoke('cms:setMeta'),
+
+  // Astro content collections — MDX/Markdown + frontmatter editor.
+  listContent: invoke('content:list'),
+  readContent: invoke('content:read'),
+  writeContent: invoke('content:write'),
+  contentUsage: invoke('content:usage'),
+  contentSchema: invoke('content:schema'),
   onCmsChanged: (cb) => {
     const listener = () => cb();
     ipcRenderer.on('cms:changed', listener);
