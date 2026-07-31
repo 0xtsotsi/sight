@@ -1,8 +1,8 @@
 {
-  "name": "stacki",
-  "productName": "Stacki",
+  "name": "sight",
+  "productName": "Sight",
   "version": "0.1.3",
-  "description": "Stacki — a visual builder for Astro projects — pages, layouts, components, props, live preview, and GitHub publishing.",
+  "description": "Sight — a visual builder for Astro projects — pages, layouts, components, props, live preview, and GitHub publishing.",
   "main": "electron/main.js",
   "author": "Timothy Ricks <hello@timothyricks.com>",
   "license": "MIT",
@@ -40,8 +40,8 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.stacki.editor",
-    "productName": "Stacki",
+    "appId": "dev.flowtricks.sight",
+    "productName": "Sight",
     "files": [
       "electron/**/*",
       "dist/**/*",
@@ -56,8 +56,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "flowtricks",
-      "repo": "stacki-releases",
+      "owner": "0xtsotsi",
+      "repo": "sight-releases",
       "releaseType": "release"
     },
     "mac": {

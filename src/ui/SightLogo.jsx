@@ -1,7 +1,9 @@
 import React from 'react';
 
-// Stacki wordmark. Scales by width; `currentColor` so it inherits text color.
-export default function StackiLogo({ width = 260, className, style }) {
+// Sight wordmark. The SVG glyphs still spell "Stacki" — placeholder until
+// a real Sight mark is designed. Scales by width; `currentColor` so it
+// inherits text color.
+export default function SightLogo({ width = 260, className, style }) {
   return (
     <svg
       width={width}
@@ -11,7 +13,7 @@ export default function StackiLogo({ width = 260, className, style }) {
       className={className}
       style={{ display: 'block', height: 'auto', ...style }}
       role="img"
-      aria-label="Stacki"
+      aria-label="Sight"
     >
       <path d="M1726.22 107.573C1709.2 107.573 1695.18 93.5573 1695.18 76.5384C1695.18 59.0189 1709.2 45.5039 1726.22 45.5039C1743.23 45.5039 1757.25 59.0189 1757.25 76.5384C1757.25 93.5573 1743.23 107.573 1726.22 107.573ZM1703.19 410.409V165.637H1750.24V410.409H1703.19Z" fill="currentColor" />
       <path d="M1517.08 410.409H1470.03V42H1517.08V280.765L1625.7 165.637H1684.76L1591.16 263.246L1684.26 410.409H1630.2L1558.62 297.284L1517.08 340.832V410.409Z" fill="currentColor" />

@@ -1,4 +1,4 @@
-# Stacki
+# Sight
 
 Visual Builder for Astro.
 
@@ -56,7 +56,7 @@ npm run dist:mac   # requires a Developer ID cert + notarization credentials
 Official builds are published by CI, not from anyone's laptop. Pushing a
 `v*` tag runs `.github/workflows/release.yml`, which builds a signed and
 notarized macOS universal build plus a Windows installer, uploads them to
-the `stacki-releases` repo, and only makes the release visible once both
+the `sight-releases` repo, and only makes the release visible once both
 platforms have landed. Shipped apps auto-update from that feed via
 `electron-updater`.
 

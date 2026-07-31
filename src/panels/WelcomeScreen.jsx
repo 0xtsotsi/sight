@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { cleanError } from '../App.jsx';
 import { LayersIcon, CloseIcon } from '../ui/Icons.jsx';
-import StackiLogo from '../ui/StackiLogo.jsx';
+import SightLogo from '../ui/SightLogo.jsx';
 import WelcomeBackground from '../ui/WelcomeBackground.jsx';
 
 export default function WelcomeScreen({ onOpen, setBusy, showToast }) {
@@ -45,7 +45,7 @@ export default function WelcomeScreen({ onOpen, setBusy, showToast }) {
       <WelcomeBackground />
       {/* Hero fills the space above the recents strip, centered in it. */}
       <div className="welcome-hero">
-        <StackiLogo width={320} className="welcome-logo" />
+        <SightLogo width={320} className="welcome-logo" />
         <p className="welcome-tagline">Visual Builder for Astro</p>
         <div className="actions">
           <button className="primary" onClick={createNew}>

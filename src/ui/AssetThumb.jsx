@@ -40,7 +40,7 @@ const encodePath = (abs) =>
 // file:// subresources from it. Try our scheme first, then fall back to
 // file:// so a packaged build still works if the scheme is unavailable.
 const srcCandidates = (abs) => [
-  `stacki-asset://local/${encodePath(abs)}`,
+  `sight-asset://local/${encodePath(abs)}`,
   `file:///${encodePath(abs)}`,
 ];
 

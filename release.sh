@@ -36,4 +36,4 @@ git push
 git push --tags
 
 echo "Release v$new triggered!"
-open "https://github.com/flowtricks/stacki/actions"
+# Removed: this fork doesn't push to or watch upstream CI.
