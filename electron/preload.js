@@ -4,6 +4,24 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // don't expose the app API to the previewed site — just report the page's
 // content height to the app so the canvas view can size frames to the page.
 if (!process.isMainFrame) {
+  // The privileged design iframe is the only sub-frame that receives axe.
+  // Loading it as a script keeps the app renderer isolated from page scripts.
+  if (location.hash.includes('avb-design')) {
+    const injectA11y = () => {
+      if (document.getElementById('sight-axe-core')) return;
+      const script = document.createElement('script');
+      script.id = 'sight-axe-core';
+      script.src = 'file://' + __dirname + '/node_modules/axe-core/axe.min.js';
+      script.onload = () => {
+        window.addEventListener('sight:a11y:run', async () => {
+          try { const result = await window.axe.run(document); window.parent.postMessage({ type: 'sight:a11y', results: result }, '*'); } catch (error) { window.parent.postMessage({ type: 'sight:a11y', error: String(error) }, '*'); }
+        });
+        window.parent.postMessage({ type: 'sight:a11y:ready' }, '*');
+      };
+      (document.head || document.documentElement).appendChild(script);
+    };
+    if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', injectA11y); else injectA11y();
+  }
   // Design-mode frames (canvas + editor preview) are marked with #avb-design.
   // They get an editor cursor (no I-beam over text) and links/forms are
   // inert — navigation only happens in the interactive preview mode.
@@ -499,7 +517,16 @@ if (!process.isMainFrame) {
 
 const invoke = (channel) => (payload) => ipcRenderer.invoke(channel, payload);
 
+
 contextBridge.exposeInMainWorld('avb', {
+  runA11yAudit: invoke('a11y:runAudit'),
+  setA11yRuleOverrides: invoke('a11y:setRuleOverrides'),
+  onA11yResults: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('a11y:results', listener);
+    return () => ipcRenderer.removeListener('a11y:results', listener);
+  },
+
   // Project
   openProjectDialog: invoke('project:openDialog'),
   newProjectDialog: invoke('project:newDialog'),

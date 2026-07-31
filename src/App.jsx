@@ -16,6 +16,7 @@ import CommandPalette from './ui/CommandPalette.jsx';
 import AssetsPanel from './panels/AssetsPanel.jsx';
 import CmsPanel from './panels/CmsPanel.jsx';
 import CmsView from './panels/CmsView.jsx';
+import A11yPanel from './panels/A11yPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
 import { onAssetRequest, clearAssetRequest } from './assetPick.js';
 import { isDataBound } from './bindings.js';
@@ -375,7 +376,9 @@ export default function App() {
   // scrolls the row into view — a counter, not the id, so clicking the same
   // element twice still reveals it.
   const [revealTick, setRevealTick] = useState(0);
-  const [rightTab, setRightTab] = useState('style'); // style | settings
+  const [rightTab, setRightTab] = useState('style');
+  const [a11yOpen, setA11yOpen] = useState(false);
+  const [a11yResults, setA11yResults] = useState(null); // style | settings
   // Sliding highlight behind the active Style/Settings tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
   const rightTabRefs = useRef({});
@@ -479,6 +482,17 @@ export default function App() {
       offLog();
     };
   }, []);
+
+  useEffect(() => {
+    const off = window.avb.onA11yResults((data) => { if (data?.results) setA11yResults(data.results); });
+    return off;
+  }, []);
+
+  useEffect(() => {
+    if (!devUrl) return;
+    const timer = setTimeout(() => window.avb.runA11yAudit().then(setA11yResults).catch(() => {}), 500);
+    return () => clearTimeout(timer);
+  }, [devUrl, refreshKey]);
 
   // ----------------------------------------------------------------
   // Project lifecycle
@@ -2274,6 +2288,8 @@ export default function App() {
             focusPath={focusPath}
             device={device}
             onDevice={setDevice}
+            a11yResults={a11yResults}
+            onA11yOpen={() => setA11yOpen(true)}
             onSelectPath={(p) => {
               // Editing a component: the canvas still shows the whole page, so
               // a click in the dimmed area (or on nothing) means "I'm done in
@@ -2338,6 +2354,16 @@ export default function App() {
             <iframe ref={previewIframeRef} src={previewSrc} title="Site preview (interactive)" />
           </div>
         )}
+
+        <A11yPanel
+          results={a11yResults}
+          open={a11yOpen}
+          onClose={() => setA11yOpen(false)}
+          onFix={(violation) => {
+            const node = violation.targets?.[0]?.selector;
+            if (node) { setA11yOpen(false); setRightTab('settings'); }
+          }}
+        />
 
         {pageState?.editable && (
           <div className="panel right">

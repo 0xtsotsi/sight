@@ -28,6 +28,7 @@
     "@kenkaiiii/gg-ai": "5.30.3",
     "@uiw/react-codemirror": "^4.25.11",
     "cmdk": "^1.1.1",
+    "axe-core": "^4.12.1",
     "codemirror": "^6.0.2",
     "electron-updater": "^6.8.9",
     "known-css-properties": "^0.37.0",
