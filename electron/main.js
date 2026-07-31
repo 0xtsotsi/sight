@@ -1881,18 +1881,85 @@ ipcMain.handle('page:importPathFor', async (_e, { pagePath, targetPath, projectP
 // ---------------------------------------------------------------------------
 
 function normalizeSeoHeadPayload(head) {
-  // Renderer already normalizes; this is a defensive trim so the on-disk
-  // file never carries giant empty fields or arrays.
+  // The renderer normalizes via normalizeSeoHead on every change. This is a
+  // shallow defensive trim so a malformed payload (e.g. a string where an
+  // array is expected) doesn't crash the frontmatter mirror below. Anything
+  // that survives JSON.parse(JSON.stringify(...)) and the type guards is
+  // trusted as-is.
   if (!head || typeof head !== 'object') return {};
   const clean = JSON.parse(JSON.stringify(head));
-  const trimStr = (v) => (typeof v === 'string' ? v : '');
-  if (typeof clean.title === 'string') clean.title = clean.title;
-  if (typeof clean.description === 'string') clean.description = clean.description;
-  if (typeof clean.canonical === 'string') clean.canonical = clean.canonical;
-  if (typeof clean.favicon === 'string') clean.favicon = clean.favicon;
   if (Array.isArray(clean.robots)) clean.robots = clean.robots.filter(Boolean);
-  if (Array.isArray(clean.hreflang)) clean.hreflang = clean.hreflang.filter((h) => h && (h.locale || h.url));
+  if (Array.isArray(clean.hreflang)) {
+    clean.hreflang = clean.hreflang.filter((h) => h && (h.locale || h.url));
+  }
   return clean;
+}
+
+// Replace (or insert) the page's `seo` block in its frontmatter. Two valid
+// shapes are recognized — Astro/TS `(const )?seo = { ... };` and YAML
+// `seo:\n  ...`. The replacement is always a single TS
+// `const seo = { ... };` statement so what we write is deterministic and
+// the surrounding frontmatter (imports, other consts, comments) stays
+// byte-identical outside the matched range.
+//
+// The brace-walk is required because frontmatter commonly nests objects
+// (e.g. nested AEO Q&A arrays), and a naive `};` matcher terminates at the
+// first inner close-brace. A real user frontmatter may also contain a
+// string literal with a `}` inside it — we step past those.
+function findSeoBlock(fmBody) {
+  const re = /(^|\n)(?:const\s+)?seo\s*=\s*/g;
+  let m;
+  while ((m = re.exec(fmBody)) != null) {
+    let i = m.index + m[0].length;
+    while (i < fmBody.length && /\s/.test(fmBody[i])) i++;
+    if (fmBody[i] !== '{') continue;
+    let depth = 0;
+    let j = i;
+    let inStr = null;
+    for (; j < fmBody.length; j++) {
+      const ch = fmBody[j];
+      if (inStr) {
+        if (ch === '\\') { j++; continue; }
+        if (ch === inStr) inStr = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') { inStr = ch; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { j++; break; }
+      }
+    }
+    if (depth === 0) {
+      while (j < fmBody.length && /[\s;]/.test(fmBody[j])) j++;
+      return { start: m.index + m[1].length, end: j, lead: m[1] };
+    }
+  }
+  return null;
+}
+
+function rewriteSeoInFrontmatter(source, seoJson) {
+  const block = `const seo = ${JSON.stringify(seoJson, null, 2)};\n`;
+  const fm = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
+  if (!fm) return null;
+  const fmBody = fm[2];
+  const found = findSeoBlock(fmBody);
+  let nextBody;
+  if (found) {
+    nextBody = fmBody.slice(0, found.start) + block + fmBody.slice(found.end);
+  } else {
+    // YAML key block: `seo:` then indented children up to the next top-level
+    // key (or end of frontmatter). Lazy so it stops at the first non-indented
+    // line starting with a word character followed by `:`.
+    const yamlRe = /(^|\n)seo\s*:\s*(?:\n[ \t]+[\s\S]*?)?(?=\n\w[\w$]*\s*:|\n---|$)/;
+    if (yamlRe.test(fmBody)) {
+      nextBody = fmBody.replace(yamlRe, (_mm, lead) => `${lead}${block}`);
+    } else {
+      const sep = fmBody.endsWith('\n') || fmBody === '' ? '' : '\n';
+      nextBody = fmBody + sep + block;
+    }
+  }
+  return source.slice(0, fm[1].length) + nextBody + source.slice(fm[1].length + fm[2].length);
 }
 
 ipcMain.handle('seo:readHead', async (_e, { projectPath, pagePath }) => {
@@ -1912,34 +1979,17 @@ ipcMain.handle('seo:writeHead', async (_e, { projectPath, pagePath, head }) => {
   writeSeoMeta(projectPath, meta);
 
   // Mirror into the page's frontmatter so a Layout reading via
-  // Astro.props.seo can pick it up. Preserves an existing `seo:` block by
-  // parsing and rewriting only that key — every other frontmatter line
-  // (imports, consts, comments) stays untouched.
+  // Astro.props.seo can pick it up. Best-effort: a malformed page still
+  // keeps its head data in .sight/seo.json if this fails.
   try {
     const source = fs.readFileSync(pagePath, 'utf8');
-    const m = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
-    if (m) {
-      const fmBody = m[2];
-      const seoLineRe = /^seo\s*:[\s\S]*?(?=\n(?:\w[\w$]*\s*:|[\w$\s]*\}|---|\s*$))/m;
-      // Match the seo: block by indentation (top-level keys are at col 0).
-      const blockRe = /(^seo\s*:\s*)([\s\S]*?)(?=\n\w[\w$]*\s*:|\n---|$)/m;
-      let nextBody;
-      const blockMatch = fmBody.match(blockRe);
-      if (blockMatch) {
-        nextBody = fmBody.replace(blockRe, `$1${JSON.stringify(clean, null, 2)}`);
-      } else {
-        const sep = fmBody.endsWith('\n') || fmBody === '' ? '\n' : '\n\n';
-        nextBody = fmBody + sep + `seo = ${JSON.stringify(clean, null, 2)};`;
-      }
-      const next = source.slice(0, m[1].length) + nextBody + source.slice(m[1].length + m[2].length);
-      if (next !== source) {
-        markSelfWrite(pagePath);
-        fs.writeFileSync(pagePath, next, 'utf8');
-      }
+    const next = rewriteSeoInFrontmatter(source, clean);
+    if (next != null && next !== source) {
+      markSelfWrite(pagePath);
+      fs.writeFileSync(pagePath, next, 'utf8');
     }
-  } catch (err) {
-    // The .sight/seo.json write already succeeded — frontmatter mirroring
-    // is best-effort so a malformed page still keeps its head data.
+  } catch {
+    /* best-effort: see comment above */
   }
 
   return { ok: true, savedAt: meta[key].__savedAt };

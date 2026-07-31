@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   emptySeoHead,
   normalizeSeoHead,
@@ -8,7 +8,6 @@ import {
   OG_TYPES,
   ROBOTS_FLAGS,
   looksLikeUrl,
-  clipText,
   buildJsonLd,
   buildAeoSchema,
   renderHeadTags,
