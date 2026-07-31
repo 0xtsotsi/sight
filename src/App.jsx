@@ -11,6 +11,7 @@ import LeftRail from './ui/LeftRail.jsx';
 import CodeWindow from './ui/CodeWindow.jsx';
 import PageSwitcher from './ui/PageSwitcher.jsx';
 import InsertSearch from './ui/InsertSearch.jsx';
+import CommandPalette from './ui/CommandPalette.jsx';
 import AssetsPanel from './panels/AssetsPanel.jsx';
 import CmsPanel from './panels/CmsPanel.jsx';
 import CmsView from './panels/CmsView.jsx';
@@ -363,6 +364,12 @@ export default function App() {
   // not silently drop the user out of the view they picked (which would
   // reload every preview iframe and flash the canvas white).
   const [device, setDevice] = useState('desktop');
+  // Recents are loaded once on mount so the ⌘K palette can offer 'Open recent: …'.
+  const [recents, setRecents] = useState([]);
+  useEffect(() => {
+    if (!window.avb?.listRecents) return;
+    window.avb.listRecents().then((list) => setRecents(list || [])).catch(() => {});
+  }, []);
   // Bumped every time the page itself makes the selection, so the navigator
   // scrolls the row into view — a counter, not the id, so clicking the same
   // element twice still reveals it.
@@ -2428,6 +2435,36 @@ export default function App() {
 
       {busy && <BusyOverlay message={busy} />}
       {toast && <Toast toast={toast} />}
+
+      <CommandPalette
+        project={project}
+        page={pageEntry}
+        model={model}
+        selection={selectedId}
+        settings={{ device, inPreview }}
+        recents={recents}
+        actions={{
+          togglePreview: () => (inPreview ? exitPreview() : enterPreview()),
+          setDevice,
+          openDevTools: () => window.avb?.openDevTools && window.avb.openDevTools(),
+          checkForUpdates: () => window.avb?.checkForUpdates && window.avb.checkForUpdates(),
+          openSettings: () => setRightTab('settings'),
+          refreshPreview: () => setRefreshKey((k) => k + 1),
+          undo,
+          redo,
+          openInsertPalette: () => setInsertOpen(true),
+          setLeftTab,
+          openFile,
+          openRecent: async (projectPath) => { await loadProject(projectPath); },
+          jumpToNode: (id) => {
+            // Select the node and bump reveal so the navigator scrolls it
+            // into view (mirrors what the preview already does on click).
+            setSelectedId(id);
+            setRevealTick((t) => t + 1);
+          },
+          scan,
+        }}
+      />
     </div>
   );
 }
