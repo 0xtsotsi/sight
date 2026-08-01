@@ -5,6 +5,7 @@ import PalettePanel from './panels/PalettePanel.jsx';
 import StructurePanel from './panels/StructurePanel.jsx';
 import PropsPanel from './panels/PropsPanel.jsx';
 import StylePanel from './panels/StylePanel.jsx';
+import AgentPanel from './panels/AgentPanel.jsx';
 import PreviewPane from './panels/PreviewPane.jsx';
 import GitChip from './panels/GitChip.jsx';
 import LeftRail from './ui/LeftRail.jsx';
@@ -2338,6 +2339,7 @@ export default function App() {
               {[
                 { id: 'style', label: 'Style' },
                 { id: 'settings', label: 'Settings' },
+                { id: 'agent', label: 'Agent' },
               ].map((t) => (
                 <button
                   key={t.id}
@@ -2359,6 +2361,23 @@ export default function App() {
                   setNodeText(nodeId, css, undefined, immediate)
                 }
                 onSelectNode={setSelectedId}
+              />
+            )}
+            {rightTab === 'agent' && (
+              <AgentPanel
+                project={project}
+                pageModel={model}
+                selectedNodeId={selectedId}
+                activePagePath={currentPage?.path}
+                showToast={showToast}
+                onApplyPage={() => {
+                  // Trigger a refresh so the canvas reflects the agent's
+                  // edit. The reducer/undo/redo wiring lands in task 5;
+                  // for now this is the lightest integration that keeps
+                  // the canvas in sync without bypassing the watcher's
+                  // self-write suppression.
+                  reloadFromDisk();
+                }}
               />
             )}
             <div style={{ display: rightTab === 'settings' ? 'contents' : 'none' }}>
