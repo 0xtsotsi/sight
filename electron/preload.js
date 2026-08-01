@@ -624,4 +624,10 @@ contextBridge.exposeInMainWorld('avb', {
   },
   nativeCopy: invoke('native:copy'),
   nativePaste: invoke('native:paste'),
+
+  // Agent panel — reads ~/.gg/settings.json in main and returns only the
+  // first recognized provider's {provider, apiKey}. Renderer never sees
+  // the file path or other settings keys. See electron/main.js
+  // ipcMain.handle('agent:getCredential', ...).
+  getAgentCredential: invoke('agent:getCredential'),
 });

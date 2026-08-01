@@ -13,6 +13,7 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const net = require('net');
+const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 
@@ -176,6 +177,51 @@ ipcMain.handle('native:copy', () => {
 ipcMain.handle('native:paste', () => {
   mainWindow?.webContents.paste();
   return { ok: true };
+});
+
+// Agent panel credential lookup — reads ~/.gg/settings.json in main and
+// returns only the first recognized provider's {provider, apiKey}. The
+// renderer never touches the file directly and never sees other settings
+// keys. Path resolution is sandboxed to the user's home dir (no traversal).
+//
+// Recognized providers and their settings keys (see also
+// src/agent/credentials.js for the canonical table — keep in sync):
+//   minimax   -> [REDACTED]
+//   anthropic -> ANTHROPIC_API_KEY
+//   openai    -> OPENAI_API_KEY
+//   gemini    -> GEMINI_API_KEY
+ipcMain.handle('agent:getCredential', async () => {
+  try {
+    const settingsPath = path.join(os.homedir(), '.gg', 'settings.json');
+    const resolved = path.resolve(settingsPath);
+    // Defense in depth: even though we just constructed the path from
+    // os.homedir(), re-resolve and confirm we're still under home. Cheap.
+    if (!resolved.startsWith(path.resolve(os.homedir()) + path.sep)) {
+      return { ok: false, error: 'settings path escaped home' };
+    }
+    let raw;
+    try {
+      raw = await fs.promises.readFile(resolved, 'utf8');
+    } catch {
+      return { ok: false, error: 'no settings file' };
+    }
+    const parsed = JSON.parse(raw);
+    const table = [
+      ['minimax', '[REDACTED]'],
+      ['anthropic', 'ANTHROPIC_API_KEY'],
+      ['openai', 'OPENAI_API_KEY'],
+      ['gemini', 'GEMINI_API_KEY'],
+    ];
+    for (const [provider, key] of table) {
+      const v = parsed?.[key];
+      if (typeof v === 'string' && v.trim().length > 0) {
+        return { ok: true, credential: { provider, apiKey: v.trim() } };
+      }
+    }
+    return { ok: false, error: 'no recognized provider key' };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
 });
 
 app.whenReady().then(() => {
