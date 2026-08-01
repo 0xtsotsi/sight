@@ -2370,13 +2370,27 @@ export default function App() {
                 selectedNodeId={selectedId}
                 activePagePath={currentPage?.path}
                 showToast={showToast}
-                onApplyPage={() => {
-                  // Trigger a refresh so the canvas reflects the agent's
-                  // edit. The reducer/undo/redo wiring lands in task 5;
-                  // for now this is the lightest integration that keeps
-                  // the canvas in sync without bypassing the watcher's
-                  // self-write suppression.
-                  reloadFromDisk();
+                onApplyDiff={(diff) => {
+                  // Dispatch through the same mutateModel path human edits
+                  // use: this records the undo step, sets the new model,
+                  // marks dirty, and schedules an immediate save. The save
+                  // path's writePage IPC invokes markSelfWrite in main so
+                  // the fs-watcher won't bounce back. Selecting the agent's
+                  // first added node (if any) gives the user a visible
+                  // anchor for what changed.
+                  if (!diff || !currentPage || diff.path !== currentPage.path) {
+                    showToast?.('Diff does not target the active page', 'error');
+                    return;
+                  }
+                  mutateModel(() => diff.afterJson, true, null);
+                  const firstAdded = (diff.afterJson?.nodes || []).find(
+                    (n) => !(diff.beforeJson?.nodes || []).some((b) => b.id === n.id)
+                  );
+                  if (firstAdded?.id) setSelectedId(firstAdded.id);
+                  showToast?.(`Applied: ${diff.summary}`, 'success');
+                }}
+                onRejectDiff={(diff) => {
+                  showToast?.('Rejected', 'info');
                 }}
               />
             )}

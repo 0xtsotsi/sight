@@ -16,6 +16,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { runAgentStream } from '../agent/client.js';
+import { buildSystemPrompt } from '../agent/systemPrompt.js';
 import styles from './AgentPanel.module.css';
 
 // Mirror of src/agent/types.js EVENT enum. Kept inline so this file can
@@ -134,7 +135,8 @@ export default function AgentPanel({
   pageModel,
   selectedNodeId,
   activePagePath,
-  onApplyPage,
+  onApplyDiff,
+  onRejectDiff,
   showToast,
 }) {
   const credential = useCredential();
@@ -191,6 +193,7 @@ export default function AgentPanel({
       const stream = runAgentStream({
         messages: [...messages, userMsg],
         snapshot,
+        systemPrompt: buildSystemPrompt(snapshot),
         credential: credential.credential,
         signal: controller.signal,
       });
@@ -241,31 +244,20 @@ export default function AgentPanel({
 
   const handleApply = useCallback(async (diff) => {
     try {
-      // markSelfWrite:true so the fs-watcher doesn't bounce back as an
-      // external change. The actual write contract (reducer path, etc.)
-      // is wired by task 5; for now we call writePage directly and trust
-      // the panel state to refresh via reloadFromDisk / onFsChanged.
-      const res = await window.avb.writePage({
-        pagePath: diff.path,
-        model: diff.afterJson,
-        markSelfWrite: true,
-      });
-      if (res?.ok) {
-        showToast?.('Applied', 'success');
-        onApplyPage?.(diff);
-        updateEvents((prev) => prev.filter((e) => !(e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)));
-      } else {
-        showToast?.(res?.error ?? 'Apply failed', 'error');
-      }
+      // Task 5: dispatch through the App.jsx reducer path so the edit
+      // gets undo/redo + dirty tracking + the same save/markSelfWrite
+      // flow human edits use. We do NOT call window.avb.writePage here.
+      onApplyDiff?.(diff);
+      updateEvents((prev) => prev.filter((e) => !(e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)));
     } catch (err) {
       showToast?.(String(err?.message ?? err), 'error');
     }
-  }, [onApplyPage, showToast, updateEvents]);
+  }, [onApplyDiff, showToast, updateEvents]);
 
   const handleReject = useCallback((diff) => {
+    onRejectDiff?.(diff);
     updateEvents((prev) => prev.filter((e) => !(e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)));
-    showToast?.('Rejected', 'info');
-  }, [updateEvents, showToast]);
+  }, [onRejectDiff, updateEvents]);
 
   // ---------------------------------------------------------------------------
   // Render

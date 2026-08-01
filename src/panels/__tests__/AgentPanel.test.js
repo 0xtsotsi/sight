@@ -13,7 +13,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const panelPath = path.resolve('src/panels/AgentPanel.jsx');
 const cssPath = path.resolve('src/panels/AgentPanel.module.css');
@@ -34,12 +33,18 @@ test('AgentPanel.jsx imports runAgentStream from src/agent/client.js', async () 
   assert.match(src, /import\s*\{\s*runAgentStream\s*\}\s*from\s*['"]\.\.\/agent\/client\.js['"]/);
 });
 
+test('AgentPanel.jsx imports buildSystemPrompt (task 5)', async () => {
+  const src = await fs.readFile(panelPath, 'utf8');
+  assert.match(src, /import\s*\{\s*buildSystemPrompt\s*\}\s*from\s*['"]\.\.\/agent\/systemPrompt\.js['"]/);
+  assert.match(src, /buildSystemPrompt\(snapshot\)/);
+});
+
 test('AgentPanel.jsx has the expected prop surface', async () => {
   const src = await fs.readFile(panelPath, 'utf8');
   // default export is a function component
   assert.match(src, /export\s+default\s+function\s+AgentPanel/);
-  // Required props from App.jsx
-  for (const prop of ['project', 'pageModel', 'selectedNodeId', 'activePagePath', 'showToast', 'onApplyPage']) {
+  // Required props from App.jsx (task 5: onApplyDiff/onRejectDiff replace onApplyPage)
+  for (const prop of ['project', 'pageModel', 'selectedNodeId', 'activePagePath', 'showToast', 'onApplyDiff', 'onRejectDiff']) {
     assert.ok(src.includes(prop), `expected prop "${prop}" in AgentPanel signature or destructure`);
   }
 });
