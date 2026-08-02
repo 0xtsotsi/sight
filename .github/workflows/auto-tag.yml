@@ -1,0 +1,96 @@
+name: Auto-tag release
+
+# Auto-bump the patch version in package.json and tag main with vX.Y.Z on
+# every merge to main. The existing release.yml picks up v* tags and runs
+# the macOS + Windows builds + the publish step.
+#
+# How it skips: pushes to main that contain "[skip release]" in the commit
+# message don't get tagged. Use that on docs-only or CI-only merges.
+#
+# Why a separate workflow from release.yml:
+#   - release.yml assumes a tag already exists and only signs/builds.
+#   - Doing the bump here keeps release.yml a pure build pipeline (no git
+#     writes from inside the build).
+#
+# Permissions: needs `contents: write` to push the tag, plus the
+# `id-token: write` already configured for notarization. The fork guard
+# remains in place — `flowtricks/*` is still impossible to push.
+
+on:
+  push:
+    branches: ['main']
+
+permissions:
+  contents: write
+
+jobs:
+  bump-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check for skip-release marker
+        id: skip
+        run: |
+          set -euo pipefail
+          msg=$(git log -1 --pretty=%B)
+          if echo "$msg" | grep -qE '\[skip release\]'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip-release marker found in commit message; not tagging"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next version (patch bump)
+        if: steps.skip.outputs.skip != 'true'
+        id: version
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const v = pkg.version.split(".").map(Number);
+            v[2] = (v[2] || 0) + 1;
+            const next = v.join(".");
+            fs.writeFileSync("/tmp/next-version.txt", next);
+            console.log("next:", next);
+          '
+          echo "next=$(cat /tmp/next-version.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version in package.json
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.version = process.env.NEXT;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+
+      - name: Commit version bump
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "Sight Release Bot"
+          git config user.email "release-bot@sight.local"
+          git add package.json
+          git commit -m "release: bump to v${{ steps.version.outputs.next }} [skip release]"
+          git push origin main
+
+      - name: Tag the release commit
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git tag -a "v${{ steps.version.outputs.next }}" -m "Release v${{ steps.version.outputs.next }}"
+          git push origin "v${{ steps.version.outputs.next }}"
