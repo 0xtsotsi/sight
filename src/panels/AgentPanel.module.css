@@ -1,0 +1,372 @@
+/* src/panels/AgentPanel.module.css
+ *
+ * Visual conventions match the right-rail panels in styles.css:
+ *   - width fills the .panel.right slot (322px in styles.css)
+ *   - color tokens read from --bg, --text, --border, --accent
+ *   - dark theme is the default; light theme handled by the existing
+ *     root attribute switch.
+ *
+ * Note: this file uses CSS Modules. Other panels in this project use
+ * global classes in styles.css. The two coexist — Vite scopes module
+ * classes to the panel. If we want to consolidate later, move these
+ * rules into styles.css with a `.agent-` prefix and switch AgentPanel.jsx
+ * to plain string className props.
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.subtitle {
+  font-size: 11px;
+  opacity: 0.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.banner {
+  margin: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.banner strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.banner code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message {
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message_user {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  align-self: flex-end;
+  max-width: 90%;
+}
+
+.message_assistant {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  align-self: flex-start;
+  max-width: 90%;
+}
+
+.messageRole {
+  font-size: 10px;
+  text-transform: uppercase;
+  opacity: 0.5;
+  margin-bottom: 2px;
+  letter-spacing: 0.04em;
+}
+
+.messageContent {
+  /* inherits white-space from .message */
+}
+
+.live {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.liveText {
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  padding: 4px 0;
+}
+
+.liveThinking {
+  font-size: 12px;
+  font-style: italic;
+  opacity: 0.7;
+  padding: 4px 0;
+}
+
+.liveMeta {
+  font-size: 11px;
+  opacity: 0.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.liveError {
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, #d93025 50%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, #d93025 8%, transparent);
+}
+
+.abort {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.abort:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* Tool trace */
+.toolTrace {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.toolTraceToggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+
+.toolTraceToggle:hover {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.toolStatus {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.toolStatus_started {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.toolStatus_done {
+  background: color-mix(in srgb, #16a34a 25%, transparent);
+}
+
+.toolStatus_error {
+  background: color-mix(in srgb, #d93025 25%, transparent);
+}
+
+.toolName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.toolTraceBody {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.toolArgs,
+.toolResult,
+.toolError {
+  margin: 0;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.toolError {
+  border-left: 2px solid #d93025;
+}
+
+/* Diff card */
+.diffCard {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diffHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diffSummary {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.diffToggle {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.diffBody {
+  margin: 0;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 280px;
+}
+
+.diffActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.diffApply,
+.diffReject {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.diffApply {
+  background: var(--accent);
+  color: var(--accent-contrast, white);
+  border-color: transparent;
+}
+
+.diffApply:disabled,
+.diffReject:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Composer */
+.composer {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.toggles {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+}
+
+.toggle {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.input {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  width: 100%;
+  resize: vertical;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.composerActions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.send {
+  font-size: 12px;
+  padding: 4px 14px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-contrast, white);
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
