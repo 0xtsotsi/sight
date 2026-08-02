@@ -11,3 +11,9 @@ release/
 *.pem
 *.key
 *.mobileprovision
+
+# Local agent-loop working artifacts (created by the chat assistant at
+# runtime — never commit):
+.gg/
+docs/
+CLAUDE.md

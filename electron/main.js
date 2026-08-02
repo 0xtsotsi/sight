@@ -29,6 +29,7 @@ const {
 } = require('./astroParser');
 const { scaffoldProject } = require('./scaffold');
 const { importersOf } = require('./cmsRefs');
+const agentCredential = require('./agentCredential');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
@@ -179,50 +180,26 @@ ipcMain.handle('native:paste', () => {
   return { ok: true };
 });
 
-// Agent panel credential lookup — reads ~/.gg/settings.json in main and
-// returns only the first recognized provider's {provider, apiKey}. The
-// renderer never touches the file directly and never sees other settings
+// Agent panel credential lookup — reads ~/.gg/settings.json first, then
+// falls back to ~/.gg/auth.json (the same store used by `ggcoder` CLI).
+// Returns only the first recognized provider's {provider, apiKey}. The
+// renderer never touches these files directly and never sees other settings
 // keys. Path resolution is sandboxed to the user's home dir (no traversal).
 //
-// Recognized providers and their settings keys (see also
-// src/agent/credentials.js for the canonical table — keep in sync):
-//   minimax   -> [REDACTED]
-//   anthropic -> ANTHROPIC_API_KEY
-//   openai    -> OPENAI_API_KEY
-//   gemini    -> GEMINI_API_KEY
-ipcMain.handle('agent:getCredential', async () => {
-  try {
-    const settingsPath = path.join(os.homedir(), '.gg', 'settings.json');
-    const resolved = path.resolve(settingsPath);
-    // Defense in depth: even though we just constructed the path from
-    // os.homedir(), re-resolve and confirm we're still under home. Cheap.
-    if (!resolved.startsWith(path.resolve(os.homedir()) + path.sep)) {
-      return { ok: false, error: 'settings path escaped home' };
-    }
-    let raw;
-    try {
-      raw = await fs.promises.readFile(resolved, 'utf8');
-    } catch {
-      return { ok: false, error: 'no settings file' };
-    }
-    const parsed = JSON.parse(raw);
-    const table = [
-      ['minimax', '[REDACTED]'],
-      ['anthropic', 'ANTHROPIC_API_KEY'],
-      ['openai', 'OPENAI_API_KEY'],
-      ['gemini', 'GEMINI_API_KEY'],
-    ];
-    for (const [provider, key] of table) {
-      const v = parsed?.[key];
-      if (typeof v === 'string' && v.trim().length > 0) {
-        return { ok: true, credential: { provider, apiKey: v.trim() } };
-      }
-    }
-    return { ok: false, error: 'no recognized provider key' };
-  } catch (err) {
-    return { ok: false, error: err?.message ?? String(err) };
-  }
-});
+// Recognized providers and their lookup keys (see also
+// electron/agentCredential.js for the canonical table — keep in sync):
+//   minimax   -> settings.json: MINIMAX_API_KEY  | auth.json: minimax.accessToken
+//   anthropic -> settings.json: ANTHROPIC_API_KEY | auth.json: anthropic.accessToken
+//   openai    -> settings.json: OPENAI_API_KEY    | auth.json: openai.accessToken
+//   gemini    -> settings.json: GEMINI_API_KEY    | auth.json: gemini.accessToken
+//
+// Implemention lives in ./agentCredential.js so the IPC handler and the
+// smoke-test both target the same code path. Priority: settings.json wins
+// for the active provider if the key is set, matching the convention that
+// explicit user-supplied credentials override whatever `ggcoder login` last
+// cached. We always read both files so a missing settings.json entry doesn't
+// shadow a valid auth.json token.
+ipcMain.handle('agent:getCredential', async () => agentCredential.getCredential());
 
 app.whenReady().then(() => {
   setApplicationIcon();
