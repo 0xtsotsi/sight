@@ -248,20 +248,121 @@ function parseTemplate(str) {
 // Index of the close tag matching an already-consumed open tag, handling
 // nested same-name tags.
 function findMatchingClose(str, from, name) {
-  const re = new RegExp(
-    `<${escapeRe(name)}(?=[\\s/>])(?:[^>"']|"[^"]*"|'[^']*')*?(/?)>|</${escapeRe(name)}\\s*>`,
-    'g'
-  );
-  re.lastIndex = from;
+  // The previous regex-based approach used the `g` flag, which scans
+  // forward from `from` and could match a *later* <name opening tag inside
+  // the same block — throwing the depth counter off and returning -1 for
+  // valid pages with nested <div>s (e.g. index.astro with 8 levels of
+  // div nesting). We walk character by character instead, recognizing tag-
+  // like sequences only when they correspond to `name` and are not inside
+  // an attribute string or template expression. Crucially, when we see a
+  // `<` that isn't a tag for `name`, we skip past the *entire* tag (not
+  // just one character), so we never accidentally count a substring.
+  const escName = escapeRe(name);
   let depth = 1;
-  let m;
-  while ((m = re.exec(str)) !== null) {
-    if (m[0].startsWith('</')) {
-      depth--;
-      if (depth === 0) return m.index;
-    } else if (m[1] !== '/') {
-      depth++;
+  let i = from;
+  while (i < str.length) {
+    // Find the next '<'
+    const lt = str.indexOf('<', i);
+    if (lt === -1) return -1;
+    // What kind of tag is at < ?
+    const afterLt = str.charAt(lt + 1);
+    if (afterLt === '!') {
+      // Comment <!-- ... --> or doctype <! ... >. Skip both.
+      if (str.startsWith('<!--', lt)) {
+        const end = str.indexOf('-->', lt + 4);
+        if (end === -1) return -1;
+        i = end + 3;
+        continue;
+      }
+      const end = str.indexOf('>', lt);
+      if (end === -1) return -1;
+      i = end + 1;
+      continue;
     }
+    if (afterLt === '/') {
+      // Closing tag </name ...> or </other>
+      const rest = str.slice(lt + 2, lt + 2 + escName.length);
+      // Compare names case-insensitively (HTML convention).
+      if (rest.toLowerCase() === escName.toLowerCase()) {
+        // Confirm with whitespace or > after the name.
+        const after = str.charAt(lt + 2 + escName.length);
+        if (after === ' ' || after === '\t' || after === '\n' || after === '\r' || after === '>') {
+          depth--;
+          if (depth === 0) return lt;
+          const end = str.indexOf('>', lt);
+          if (end === -1) return -1;
+          i = end + 1;
+          continue;
+        }
+      }
+      // Some other close tag. Skip past it.
+      const end = str.indexOf('>', lt);
+      if (end === -1) return -1;
+      i = end + 1;
+      continue;
+    }
+    // Opening tag for some name. Get the tag name.
+    const nameMatch = /^([A-Za-z][\w.-]*)/.exec(str.slice(lt + 1));
+    if (!nameMatch) {
+      // Stray '<' — not a tag. Skip one char and keep going.
+      i = lt + 1;
+      continue;
+    }
+    const tagName = nameMatch[1];
+    // Find the end of this tag, respecting attribute strings and {} exprs.
+    const tagEnd = scanTagEnd(str, lt);
+    if (tagEnd === -1) return -1;
+    const selfClose = str.charAt(tagEnd - 1) === '/';
+    if (tagName.toLowerCase() === escName.toLowerCase()) {
+      if (!selfClose) depth++;
+      if (depth === 0) return lt; // unreachable but safe
+    }
+    // For raw elements (script, style), skip their entire content.
+    if (!selfClose && (tagName.toLowerCase() === 'script' || tagName.toLowerCase() === 'style')) {
+      const close = str.toLowerCase().indexOf('</' + tagName.toLowerCase(), tagEnd + 1);
+      if (close === -1) return -1;
+      const closeEnd = str.indexOf('>', close);
+      if (closeEnd === -1) return -1;
+      i = closeEnd + 1;
+      continue;
+    }
+    i = tagEnd + 1;
+  }
+  return -1;
+}
+
+// Scan forward from `start` (which must be '<') to find the `>` that ends
+// the tag, skipping over attribute strings ("..." / '...') and one level
+// of {} template expressions. Returns the index of `>`, or -1 if unclosed.
+function scanTagEnd(str, start) {
+  let i = start + 1;
+  while (i < str.length) {
+    const c = str[i];
+    if (c === '"' || c === "'") {
+      const close = str.indexOf(c, i + 1);
+      if (close === -1) return -1;
+      i = close + 1;
+      continue;
+    }
+    if (c === '{') {
+      // Skip one level of {} (with one level of nested {} inside).
+      let d = 1;
+      i++;
+      while (i < str.length && d > 0) {
+        if (str[i] === '{') d++;
+        else if (str[i] === '}') d--;
+        else if (str[i] === '"' || str[i] === "'") {
+          const close = str.indexOf(str[i], i + 1);
+          if (close === -1) return -1;
+          i = close;
+        }
+        i++;
+      }
+      if (d !== 0) return -1;
+      continue;
+    }
+    if (c === '>') return i;
+    i++;
   }
   return -1;
 }

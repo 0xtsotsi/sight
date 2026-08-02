@@ -16,12 +16,11 @@
 // What does NOT live here:
 //   - The apply/dispatch path (lives in App.jsx + AgentPanel — task 5).
 //   - Diff computation (lives in src/agent/diff.js — task 6).
-//   - The credential read (lives in src/agent/credentials.js — task 7);
-//     we accept it as an arg so this file stays pure and testable.
+//   - The credential read (handled by the IPC verb in main.js — the
+//     renderer accepts the credential as an arg so this file stays pure).
 
 import { agentLoop, isAbortError } from '@kenkaiiii/gg-agent';
 import { buildTools } from './tools.js';
-import { readCredential } from './credentials.js';
 import { EVENT, PROVIDERS } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -259,7 +258,7 @@ function translateEvent(ev) {
  * @param {string}   [args.systemPrompt]   - pre-built system prompt (task 5)
  * @param {string}   [args.model]          - override model id (defaults per provider)
  * @param {AbortSignal} [args.signal]
- * @param {Object}   [args.credential]    - override; if absent, readCredential() is called
+ * @param {Object}   args.credential     - {provider, apiKey} from window.avb.getAgentCredential
  * @returns {AsyncGenerator<Object>}
  */
 export async function* runAgentStream({
@@ -275,7 +274,7 @@ export async function* runAgentStream({
     return;
   }
 
-  const cred = credential ?? (await readCredential());
+  const cred = credential;
   if (!cred || !cred.apiKey) {
     yield {
       type: EVENT.ERROR,
