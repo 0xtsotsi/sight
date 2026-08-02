@@ -1,9 +1,19 @@
 name: Release
 
+# Triggered by tag pushes (v*) OR manually via workflow_dispatch. The
+# dispatch trigger is a fallback in case the auto-tag workflow pushes the
+# tag with GITHUB_TOKEN (which doesn't cascade into other workflows).
+#
+# Manual usage:   gh workflow run release.yml --ref v0.1.4
+# (sets github.ref_name = v0.1.4 so all downstream steps see the right tag)
+#
+# If you set the RELEASE_TOKEN secret in auto-tag.yml, you don't need to
+# use dispatch — the cascade will fire automatically.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch: {}
 
 jobs:
   build-mac:

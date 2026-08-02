@@ -90,7 +90,28 @@ jobs:
 
       - name: Tag the release commit
         if: steps.skip.outputs.skip != 'true'
+        env:
+          # Use a PAT/GitHub App token to push the tag, so downstream
+          # workflows (release.yml) actually fire. GITHUB_TOKEN triggers
+          # are intentionally blocked from cascading into other workflows
+          # by GitHub Actions.
+          #
+          # If RELEASE_TOKEN is not set, fall back to GITHUB_TOKEN — the
+          # tag is still pushed but release.yml won't fire automatically.
+          # Manual recovery: `gh workflow run release.yml --ref vX.Y.Z`
+          # (requires workflow_dispatch on release.yml; this PR adds it).
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -euo pipefail
-          git tag -a "v${{ steps.version.outputs.next }}" -m "Release v${{ steps.version.outputs.next }}"
-          git push origin "v${{ steps.version.outputs.next }}"
+          tag="v${{ steps.version.outputs.next }}"
+          git tag -a "$tag" -m "Release $tag"
+          if [ -n "$RELEASE_TOKEN" ]; then
+            echo "pushing tag with RELEASE_TOKEN (will trigger release.yml)"
+            git push "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$tag"
+          else
+            echo "RELEASE_TOKEN not set — pushing with default token"
+            echo "  ⚠️  release.yml will NOT auto-fire. Either:"
+            echo "     1. Set a RELEASE_TOKEN secret (PAT or GitHub App token with repo scope), or"
+            echo "     2. Add workflow_dispatch to release.yml and trigger manually."
+            git push origin "$tag"
+          fi
