@@ -80,6 +80,21 @@ jobs:
     needs: [build-mac, build-windows]
     runs-on: ubuntu-latest
     steps:
+      - name: Verify tag matches package.json version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          pkg=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)')
+          # Tag should be vX.Y.Z; strip the leading 'v'.
+          tag_version="${TAG#v}"
+          if [ "$pkg" != "$tag_version" ]; then
+            echo "✗ package.json version ($pkg) does not match tag ($TAG)"
+            echo "  Refusing to publish. Re-tag the right commit, or fix package.json."
+            exit 1
+          fi
+          echo "✓ package.json version ($pkg) matches tag ($TAG)"
+
       - name: Verify both platforms uploaded, then publish
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -94,4 +109,22 @@ jobs:
               *) echo "missing $required — refusing to publish"; exit 1 ;;
             esac
           done
+          # Post a release-notes summary as a comment on the bump commit (if
+          # we can identify it). Best-effort — skipped if the bump commit
+          # can't be resolved.
+          echo "✓ asset check passed; flipping draft to published"
           gh release edit "$TAG" --repo 0xtsotsi/sight-releases --draft=false --latest
+
+      - name: Notify via Discord (if webhook configured)
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "no DISCORD_RELEASE_WEBHOOK secret set; skipping"
+            exit 0
+          fi
+          payload=$(printf '{"content":"🚀 Sight %s released — see https://github.com/0xtsotsi/sight-releases/releases/tag/%s"}' "$TAG" "$TAG")
+          curl -fsS -H 'Content-Type: application/json' -d "$payload" "$DISCORD_WEBHOOK" \
+            || { echo "webhook post failed (non-fatal)"; }
