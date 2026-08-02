@@ -12,6 +12,10 @@
 //   npm run codegen:agent -- <tool-name> "<short description>"
 //   npm run codegen:agent -- read_style "Read a CSS style block by selector"
 //
+// Interactive mode (no args):
+//   npm run codegen:agent -- --interactive
+//   npm run codegen:agent                # same, when stdin is a TTY
+//
 // Conventions enforced (matches the existing code):
 //   - Tool names use snake_case (matches the MCP convention).
 //   - Args are validated via zod (schemas.js) and a parallel JSON Schema
@@ -19,14 +23,12 @@
 //   - Handlers read projectPath from the injected `ctx` — never closure.
 //   - Write-capability tools are flagged at scaffold time and emit a
 //     warning if the user picks a non-`_diff` suffix for a write verb.
-//
-// Interactive: not yet. The script currently takes args and edits files
-// non-interactively. Add a REPL if you want prompts.
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 
 const here = path.resolve(__dirname, '..');
 const schemasFile = path.join(here, 'src', 'agent', 'schemas.js');
@@ -36,19 +38,80 @@ const testFile = path.join(here, 'src', 'agent', '__tests__', 'tools.smoke.test.
 function die(msg) {
   console.error('error:', msg);
   console.error('Usage: npm run codegen:agent -- <tool_name_snake_case> "<description>"');
+  console.error('       npm run codegen:agent -- --interactive');
   process.exit(1);
 }
 
-const toolName = process.argv[2];
-const toolDesc = process.argv[3];
+async function prompt(rl, question, defaultValue) {
+  return new Promise((resolve) => {
+    const q = defaultValue
+      ? `${question} [${defaultValue}]: `
+      : `${question}: `;
+    rl.question(q, (answer) => {
+      const v = (answer || '').trim();
+      resolve(v || defaultValue || '');
+    });
+  });
+}
 
-if (!toolName || !toolDesc) die('missing args');
-if (!/^[a-z][a-z0-9_]*$/.test(toolName)) {
-  die(`tool name must be snake_case starting with a letter, got: ${toolName}`);
+async function promptArgs() {
+  // Decide if we should enter the REPL: explicit --interactive flag, OR
+  // no args + a TTY stdin. CI runs (no TTY, no args) fail loudly instead
+  // of hanging on a read.
+  const interactive = process.argv.includes('--interactive') || process.argv.includes('-i');
+  if (process.argv[2] && process.argv[3]) {
+    return { toolName: process.argv[2], toolDesc: process.argv[3] };
+  }
+  if (!interactive && !(process.stdin.isTTY && !process.argv[2])) {
+    die('missing args (use --interactive to enter the REPL)');
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log('');
+    console.log('=== Sight agent-tool scaffold (interactive) ===');
+    console.log('Press Ctrl-C to abort at any time.');
+    console.log('');
+    console.log('Naming rules:');
+    console.log('  - snake_case starting with a lowercase letter');
+    console.log('  - Write tools MUST end in _diff (see src/agent/tools.js)');
+    console.log('');
+
+    let name = '';
+    while (!name) {
+      const candidate = await prompt(rl, 'Tool name (snake_case)');
+      if (!/^[a-z][a-z0-9_]*$/.test(candidate)) {
+        console.log('  ✗ invalid name. Examples: read_style, apply_style_diff, list_assets');
+        continue;
+      }
+      name = candidate;
+    }
+
+    let desc = '';
+    while (desc.length < 8 || desc.length > 200) {
+      desc = await prompt(rl, 'Short description (8–200 chars)');
+      if (desc.length < 8 || desc.length > 200) {
+        console.log(`  ✗ must be 8–200 chars, got: ${desc.length}`);
+        desc = '';
+      }
+    }
+
+    return { toolName: name, toolDesc: desc };
+  } finally {
+    rl.close();
+  }
 }
-if (toolDesc.length < 8 || toolDesc.length > 200) {
-  die(`description must be 8–200 chars, got: ${toolDesc.length}`);
-}
+
+(async () => {
+  const { toolName, toolDesc } = await promptArgs();
+
+  if (!toolName || !toolDesc) die('missing args');
+  if (!/^[a-z][a-z0-9_]*$/.test(toolName)) {
+    die(`tool name must be snake_case starting with a letter, got: ${toolName}`);
+  }
+  if (toolDesc.length < 8 || toolDesc.length > 200) {
+    die(`description must be 8–200 chars, got: ${toolDesc.length}`);
+  }
 
 const camelName = toolName.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 const argsSchemaName = camelName + 'ArgsSchema';
@@ -175,3 +238,7 @@ console.log('  2. Mirror it in src/agent/tools.js inputSchemas');
 console.log('  3. Implement the handler in src/agent/tools.js');
 console.log('  4. Run: npm test');
 console.log('  5. Verify end-to-end: npm run agent:test');
+})().catch((err) => {
+  console.error('FAIL: uncaught error:', err && err.stack ? err.stack : err);
+  process.exit(1);
+});
