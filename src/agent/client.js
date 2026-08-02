@@ -278,7 +278,9 @@ export async function* runAgentStream({
   if (!cred || !cred.apiKey) {
     yield {
       type: EVENT.ERROR,
-      message: 'No provider API key configured. Add one to ~/.gg/settings.json.',
+      message:
+        'No provider API key configured. Add MINIMAX_API_KEY to ~/.gg/settings.json ' +
+        'or run `ggcoder login` to populate ~/.gg/auth.json.',
     };
     return;
   }

@@ -13,7 +13,11 @@
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
-    "dist:mac:unsigned": "npm run build && electron-builder --mac -c.mac.forceCodeSigning=false -c.mac.notarize=false -c.mac.identity=null"
+    "dist:mac:unsigned": "npm run build && electron-builder --mac -c.mac.forceCodeSigning=false -c.mac.notarize=false -c.mac.identity=null",
+    "test": "node --test src/agent/__tests__/credential.smoke.test.js src/agent/__tests__/tools.smoke.test.js src/agent/__tests__/systemPrompt.test.js src/agent/__tests__/client.test.js",
+    "agent:test": "node scripts/agent-smoke.cjs",
+    "agent:test:fake": "SIGHT_AGENT_TEST_FAKE=1 node scripts/agent-smoke.cjs",
+    "codegen:agent": "node scripts/codegen-agent.cjs"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
