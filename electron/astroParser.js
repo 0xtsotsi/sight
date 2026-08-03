@@ -33,6 +33,24 @@ const BUILTIN_COMPONENTS = new Set([
   'Picture', // from 'astro:assets'
 ]);
 
+// Top-level frontmatter keys the SEO/AEO panel writes via .sight/seo.json.
+// The panel's canonical store is .sight/seo.json (see electron/main.js
+// readSeoMeta / writeSeoMeta), but when a page needs the data inside its
+// own frontmatter (e.g. so the layout reads it via `Astro.props.seo`), the
+// parser preserves `seo:` as part of `extraFrontmatter`. Recognition here
+// is what keeps the page editable instead of falling through to CodeMirror.
+//
+// { seo: { type: 'object' } }
+const RECOGNIZED_FRONTMATTER_OBJECTS = new Set(['seo']);
+
+// Returns true if the frontmatter text references a key the panel owns.
+// The parser already preserves arbitrary frontmatter verbatim, so this is
+// advisory — it lets the main-process writer know it can re-emit the same
+// block without disturbing anything.
+function hasRecognizedObjectKey(frontmatter, key) {
+  return new RegExp(`(^|\n)${key}\s*:`).test(frontmatter);
+}
+
 let nextId = 1;
 const makeId = () => `n${nextId++}`;
 
@@ -1049,4 +1067,7 @@ module.exports = {
   serializeNodeToJson,
 
   parseTransitionsFromModel,
+
+  hasRecognizedObjectKey,
+  RECOGNIZED_FRONTMATTER_OBJECTS,
 };

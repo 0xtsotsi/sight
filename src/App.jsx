@@ -9,6 +9,9 @@ import AgentPanel from './panels/AgentPanel.jsx';
 import AiPanel from './panels/AiPanel.jsx';
 import SettingsAi from './panels/SettingsAi.jsx';
 import TransitionsPanel from './panels/TransitionsPanel.jsx';
+
+
+import SeoPanel from './panels/SeoPanel.jsx';
 import PreviewPane from './panels/PreviewPane.jsx';
 import GitChip from './panels/GitChip.jsx';
 import LeftRail from './ui/LeftRail.jsx';
@@ -387,6 +390,9 @@ export default function App() {
   const [a11yResults, setA11yResults] = useState(null); // style | settings | ai
   const [aiOpen, setAiOpen] = useState(false);
   // Sliding highlight behind the active Style/Settings tab, measured from the
+
+  const [rightTab, setRightTab] = useState('style'); // style | settings | head
+  // Sliding highlight behind the active Style/Settings/Head tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
   const rightTabRefs = useRef({});
   const [rightTabInd, setRightTabInd] = useState(null);
@@ -1387,6 +1393,11 @@ export default function App() {
       if (!mod && !e.altKey && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault();
         setRightTab('settings');
+        return;
+      }
+      if (!mod && !e.altKey && (e.key === 'h' || e.key === 'H')) {
+        e.preventDefault();
+        setRightTab('head');
         return;
       }
 
@@ -2493,6 +2504,8 @@ export default function App() {
                 { id: 'ai', label: 'AI' },
                 { id: 'agent', label: 'Agent' },
                 { id: 'transitions', label: 'Transitions' },
+
+                { id: 'head', label: 'Head' },
               ].map((t) => (
                 <button
                   key={t.id}
@@ -2602,6 +2615,15 @@ export default function App() {
             {rightTab === 'transitions' && project && (
               <TransitionsPanel project={project} />
             )}
+
+
+            <div style={{ display: rightTab === 'head' ? 'contents' : 'none' }}>
+              <SeoPanel
+                project={project}
+                page={currentPage}
+                showToast={showToast}
+              />
+            </div>
           </div>
         )}
       </div>

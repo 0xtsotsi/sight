@@ -731,6 +731,13 @@ contextBridge.exposeInMainWorld('avb', {
   deletePageFolder: invoke('pagefolder:delete'),
   importPathFor: invoke('page:importPathFor'),
 
+  // SEO / AEO <head> panel
+  readHead: invoke('seo:readHead'),
+  writeHead: invoke('seo:writeHead'),
+  readSitemap: invoke('seo:readSitemap'),
+  writeSitemap: invoke('seo:writeSitemap'),
+  renderOgPreview: invoke('seo:renderOgPreview'),
+
   // Dev server
   startDevServer: invoke('dev:start'),
   stopDevServer: invoke('dev:stop'),

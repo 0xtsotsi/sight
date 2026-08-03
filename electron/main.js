@@ -19,6 +19,18 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 
+
+const {
+  parsePage,
+  serializePage,
+  parseTemplate,
+  serializeNodes,
+  resolveChunks,
+  parsePropSchema,
+  parseExtendsTag,
+  parseSlots,
+  hasRecognizedObjectKey,
+} = require('./astroParser');
 const { scaffoldProject } = require('./scaffold');
 const { importersOf } = require('./cmsRefs');
 const agentCredential = require('./agentCredential');
@@ -1565,6 +1577,10 @@ ipcMain.handle('cms:create', async (_e, { projectPath, name }) => {
 // from a line of text — or anything at all from an empty field. Types the user
 // picked explicitly are remembered here, keyed by collection and field path.
 const cmsMetaPath = (projectPath) => path.join(projectPath, '.sight', 'cms.json');
+// Per-page SEO / AEO <head> metadata — same shape as cms.json, keyed by the
+// page's relative path under src/. Parallel to .sight/cms.json; the renderer
+// owns reads/writes via the seo:* IPC handlers below.
+const seoMetaPath = (projectPath) => path.join(projectPath, '.sight', 'seo.json');
 // Pre-rebrand (Stacki) used .stacki/cms.json. Migrate a user's existing file
 // once so their CMS type choices survive the upgrade. Best-effort: failures
 // here should never break a read, so we swallow everything.
@@ -1581,6 +1597,29 @@ function migrateLegacyCmsMeta(projectPath) {
   } catch {
     /* best-effort: read/write failures are handled by callers */
   }
+}
+
+function readSeoMeta(projectPath) {
+  try {
+    return JSON.parse(fs.readFileSync(seoMetaPath(projectPath), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeSeoMeta(projectPath, data) {
+  const file = seoMetaPath(projectPath);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  markSelfWrite(file);
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  return { savedAt: Date.now() };
+}
+
+// A page's entry key is its src/-relative POSIX path, e.g. "pages/index.astro".
+function seoKeyForPage(projectPath, pagePath) {
+  const srcDir = path.join(projectPath, 'src') + path.sep;
+  const abs = path.resolve(pagePath);
+  return abs.startsWith(srcDir) ? toPosix(abs.slice(srcDir.length)) : toPosix(abs);
 }
 
 function readCmsMeta(projectPath) {
@@ -1824,6 +1863,210 @@ ipcMain.handle('page:importPathFor', async (_e, { pagePath, targetPath, projectP
   }
   return { relative, srcRelative };
 });
+
+// ---------------------------------------------------------------------------
+// SEO / AEO <head> — per-page metadata store at .sight/seo.json
+//
+// The canonical source of truth is .sight/seo.json, keyed by the page's
+// src/-relative path. seo:writeHead additionally mirrors the data into the
+// page's frontmatter as a `seo: { ... }` block so a Layout reading
+// `Astro.props.seo` (or `<Component ... seo={frontmatter.seo} />`) can use
+// it. Both writes go through markSelfWrite so the file-watcher doesn't
+// bounce a redundant change back at us.
+//
+// We never edit a layout file directly — layouts vary too much for an
+// auto-rewrite to be safe; if a user wants the SEO <head> tags emitted from
+// a layout, they can do it themselves (and the renderer has an "Emitted
+// <head>" preview that shows what would go into the page).
+// ---------------------------------------------------------------------------
+
+function normalizeSeoHeadPayload(head) {
+  // The renderer normalizes via normalizeSeoHead on every change. This is a
+  // shallow defensive trim so a malformed payload (e.g. a string where an
+  // array is expected) doesn't crash the frontmatter mirror below. Anything
+  // that survives JSON.parse(JSON.stringify(...)) and the type guards is
+  // trusted as-is.
+  if (!head || typeof head !== 'object') return {};
+  const clean = JSON.parse(JSON.stringify(head));
+  if (Array.isArray(clean.robots)) clean.robots = clean.robots.filter(Boolean);
+  if (Array.isArray(clean.hreflang)) {
+    clean.hreflang = clean.hreflang.filter((h) => h && (h.locale || h.url));
+  }
+  return clean;
+}
+
+// Replace (or insert) the page's `seo` block in its frontmatter. Two valid
+// shapes are recognized — Astro/TS `(const )?seo = { ... };` and YAML
+// `seo:\n  ...`. The replacement is always a single TS
+// `const seo = { ... };` statement so what we write is deterministic and
+// the surrounding frontmatter (imports, other consts, comments) stays
+// byte-identical outside the matched range.
+//
+// The brace-walk is required because frontmatter commonly nests objects
+// (e.g. nested AEO Q&A arrays), and a naive `};` matcher terminates at the
+// first inner close-brace. A real user frontmatter may also contain a
+// string literal with a `}` inside it — we step past those.
+function findSeoBlock(fmBody) {
+  const re = /(^|\n)(?:const\s+)?seo\s*=\s*/g;
+  let m;
+  while ((m = re.exec(fmBody)) != null) {
+    let i = m.index + m[0].length;
+    while (i < fmBody.length && /\s/.test(fmBody[i])) i++;
+    if (fmBody[i] !== '{') continue;
+    let depth = 0;
+    let j = i;
+    let inStr = null;
+    for (; j < fmBody.length; j++) {
+      const ch = fmBody[j];
+      if (inStr) {
+        if (ch === '\\') { j++; continue; }
+        if (ch === inStr) inStr = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') { inStr = ch; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { j++; break; }
+      }
+    }
+    if (depth === 0) {
+      while (j < fmBody.length && /[\s;]/.test(fmBody[j])) j++;
+      return { start: m.index + m[1].length, end: j, lead: m[1] };
+    }
+  }
+  return null;
+}
+
+function rewriteSeoInFrontmatter(source, seoJson) {
+  const block = `const seo = ${JSON.stringify(seoJson, null, 2)};\n`;
+  const fm = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
+  if (!fm) return null;
+  const fmBody = fm[2];
+  const found = findSeoBlock(fmBody);
+  let nextBody;
+  if (found) {
+    nextBody = fmBody.slice(0, found.start) + block + fmBody.slice(found.end);
+  } else {
+    // YAML key block: `seo:` then indented children up to the next top-level
+    // key (or end of frontmatter). Lazy so it stops at the first non-indented
+    // line starting with a word character followed by `:`.
+    const yamlRe = /(^|\n)seo\s*:\s*(?:\n[ \t]+[\s\S]*?)?(?=\n\w[\w$]*\s*:|\n---|$)/;
+    if (yamlRe.test(fmBody)) {
+      nextBody = fmBody.replace(yamlRe, (_mm, lead) => `${lead}${block}`);
+    } else {
+      const sep = fmBody.endsWith('\n') || fmBody === '' ? '' : '\n';
+      nextBody = fmBody + sep + block;
+    }
+  }
+  return source.slice(0, fm[1].length) + nextBody + source.slice(fm[1].length + fm[2].length);
+}
+
+ipcMain.handle('seo:readHead', async (_e, { projectPath, pagePath }) => {
+  const meta = readSeoMeta(projectPath);
+  const key = seoKeyForPage(projectPath, pagePath);
+  return { head: meta[key] || null, savedAt: meta[key]?.__savedAt || null };
+});
+
+// Writes the SEO data to both .sight/seo.json and the page's frontmatter
+// (as a `seo: { ... }` block, if the layout wants to consume it). Both
+// writes are gated by markSelfWrite so the file-watcher stays quiet.
+ipcMain.handle('seo:writeHead', async (_e, { projectPath, pagePath, head }) => {
+  const clean = normalizeSeoHeadPayload(head);
+  const meta = readSeoMeta(projectPath);
+  const key = seoKeyForPage(projectPath, pagePath);
+  meta[key] = { ...clean, __savedAt: Date.now() };
+  writeSeoMeta(projectPath, meta);
+
+  // Mirror into the page's frontmatter so a Layout reading via
+  // Astro.props.seo can pick it up. Best-effort: a malformed page still
+  // keeps its head data in .sight/seo.json if this fails.
+  try {
+    const source = fs.readFileSync(pagePath, 'utf8');
+    const next = rewriteSeoInFrontmatter(source, clean);
+    if (next != null && next !== source) {
+      markSelfWrite(pagePath);
+      fs.writeFileSync(pagePath, next, 'utf8');
+    }
+  } catch {
+    /* best-effort: see comment above */
+  }
+
+  return { ok: true, savedAt: meta[key].__savedAt };
+});
+
+// --- sitemap.xml ------------------------------------------------------
+
+// Reads the project's sitemap, preferring public/ (where Astro serves it
+// from /sitemap.xml) then falling back to dist/ (post-build) and src/.
+// Returns { xml, path } on hit, { missing: true } otherwise.
+ipcMain.handle('seo:readSitemap', async (_e, projectPath) => {
+  const candidates = [
+    path.join(projectPath, 'public', 'sitemap.xml'),
+    path.join(projectPath, 'dist', 'sitemap.xml'),
+    path.join(projectPath, 'src', 'sitemap.xml'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const xml = fs.readFileSync(p, 'utf8');
+        return { xml, path: toPosix(path.relative(projectPath, p)) };
+      }
+    } catch {
+      /* unreadable file — try the next candidate */
+    }
+  }
+  return { missing: true };
+});
+
+// Writes (or creates) the sitemap at public/sitemap.xml — the path Astro
+// serves it from. The markSelfWrite guard keeps the public/ watcher quiet.
+ipcMain.handle('seo:writeSitemap', async (_e, { projectPath, sitemap }) => {
+  const dest = path.join(projectPath, 'public', 'sitemap.xml');
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  markSelfWrite(dest);
+  fs.writeFileSync(dest, String(sitemap || ''), 'utf8');
+  return { ok: true, path: 'public/sitemap.xml' };
+});
+
+// --- OG preview render -----------------------------------------------
+
+// One hidden BrowserWindow per render call. Reusing it would let stale
+// pages bleed into a fresh request; creating-and-closing is cheap and
+// avoids cross-talk between two adjacent edits.
+async function renderOgPreview({ html, width = 1200, height = 630 }) {
+  let win = null;
+  try {
+    win = new BrowserWindow({
+      width,
+      height,
+      show: false,
+      paintWhenInitiallyHidden: true,
+      webPreferences: {
+        offscreen: false,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    const dataUrl =
+      'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+    await win.loadURL(dataUrl);
+    // Give the layout a frame to settle (fonts, images) before grabbing it.
+    await new Promise((r) => setTimeout(r, 80));
+    const image = await win.webContents.capturePage();
+    const png = image.toPNG();
+    return { pngBase64: png.toString('base64') };
+  } catch (err) {
+    return { error: String(err?.message || err) };
+  } finally {
+    if (win) {
+      try { win.destroy(); } catch { /* already gone */ }
+    }
+  }
+}
+
+ipcMain.handle('seo:renderOgPreview', async (_e, payload) => renderOgPreview(payload || {}));
 
 // ---------------------------------------------------------------------------
 // Dev server IPC
