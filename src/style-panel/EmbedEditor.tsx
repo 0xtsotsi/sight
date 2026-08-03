@@ -30,7 +30,8 @@ import { groupDeclarations, groupProps } from './lib/sections'
 import { selectorToClassTokens, snapshotTokens, tokensToSelector } from './lib/element-tokens'
 import { resolveStyle, indexContexts, contextKeyOf, listMatchedSelectors, selectorKey, selectorsMatch, stateForSelector, STATES, type ContextInfo, type ContextKey, type MatchedSelector, type ResolvedProp, type ResolvedStyle, type SourceKey, type StateKey, type StyleContext } from './lib/resolved'
 import { breakpointTier, buildStyleContexts, mediaParamsForBreakpoint, nativeContribsFor, nativeHasValues, nativeSelectorChips, optionsFor, selectedNativeIndexFor, type NativeStyleOptions } from './lib/native-styles'
-import type { AtRule, Declaration } from 'postcss'
+import type { AtRule, Declaration, Rule } from 'postcss'
+import postcss from 'postcss'
 import {
   addDeclaration,
   appendDecl,
@@ -42,6 +43,7 @@ import {
   createRuleInQuery,
   ensureNestPath,
   ensureQueryBlock,
+  findChildRuleBySelector,
   listAtRuleBlocks,
   parseNestedInput,
   type NestStep,
@@ -2851,6 +2853,167 @@ export default function EmbedEditor() {
     })
   }, [applyEdit])
 
+  // Pseudo-block writes — `::backdrop` / `:popover-open` etc. aren't CSS properties,
+  // they're selector fragments, so they can't go through setDeclarationValue/appendDecl.
+  // The user types a declaration list (`background: rgba(0,0,0,0.5); color: white;`),
+  // we split on `;`, parse each `prop: value` pair, and upsert a nested `&<pseudo> { … }`
+  // rule under the selected rule. The compiler/serializer flattens `&::backdrop` into
+  // `.foo::backdrop` so the produced CSS is valid.
+  //
+  // `clearPseudoBlock` removes the nested rule entirely (the empty-text path).
+  function splitDeclText(text: string): Array<{ prop: string; value: string; important: boolean }> {
+    return text
+      .split(';')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((line) => {
+        // Split on the FIRST `:` so values may contain `:` (`url(data:...)`, ratios, …).
+        const idx = line.indexOf(':')
+        if (idx <= 0) return null
+        const prop = line.slice(0, idx).trim().toLowerCase()
+        let value = line.slice(idx + 1).trim()
+        let important = false
+        if (/\s+!important\s*$/i.test(value)) { important = true; value = value.replace(/\s+!important\s*$/i, '').trim() }
+        if (!prop || !value) return null
+        return { prop, value, important }
+      })
+      .filter((d): d is { prop: string; value: string; important: boolean } => d !== null)
+  }
+  // Find or create a nested `&<pseudoSelector>` rule under `parent`. Returns the child
+  // rule node (for the caller to append declarations to).
+  function ensurePseudoRule(parent: Rule, pseudoSelector: string): Rule {
+    const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase()
+    const want = norm(pseudoSelector)
+    let found: Rule | null = null
+    parent.each((n) => {
+      if (!found && n.type === 'rule' && norm((n as Rule).selector) === want) found = n as Rule
+    })
+    if (found) return found
+    const created = postcss.rule({ selector: pseudoSelector })
+    parent.append(created)
+    return created
+  }
+  // Apply parsed decls into a nested rule: replace its body entirely (semantics of a
+  // free-text pseudo row — last write wins, no prop-by-prop merge).
+  function applyDeclsToNested(nested: Rule, decls: Array<{ prop: string; value: string; important: boolean }>) {
+    // Remove every child, then re-append the new decls in order. `replaceWith` would
+    // swap a node with many, but postcss-rule children are a uniform shape so a loop is
+    // simpler and preserves the rule's own `raws` (selector, between, etc.).
+    nested.removeAll()
+    for (const d of decls) nested.append({ prop: d.prop, value: d.value, important: d.important })
+    nested.raws.semicolon = true
+  }
+  // Serialize a nested rule's body back into the free-text form, so `displayOf` can
+  // round-trip what the user typed. Skips empty / whitespace-only bodies.
+  function nestedDeclsAsText(nested: Rule): string {
+    const parts: string[] = []
+    nested.each((c) => {
+      if (c.type === 'decl') {
+        const d = c as Declaration
+        parts.push(`${d.prop}: ${d.value}${d.important ? ' !important' : ''}`)
+      }
+    })
+    return parts.join('; ')
+  }
+  // Commit path: parse text → upsert nested `&<pseudo>` rule under selectedRule.
+  const setPseudoBlock = useCallback((pseudo: string, declText: string) => {
+    const decls = splitDeclText(declText)
+    if (selectedRule) {
+      void applyEdit(selectedRule, () => {
+        const nested = ensurePseudoRule(selectedRule.node, `&${pseudo}`)
+        applyDeclsToNested(nested, decls)
+      })
+      return
+    }
+    // No rule yet — bootstrap via the same scaffolding createSelectedRule uses, then
+    // attach the nested `&<pseudo>` rule on the freshly-created parent before persisting.
+    const route = autoSelectForEdit()
+    if (!route) { setStatus('Nothing to style here — add a class in Webflow first.'); return }
+    const selector = 'embedSelector' in route ? route.embedSelector : null
+    if (!selector) { setStatus('Nothing to style here — add a class in Webflow first.'); return }
+    const embedCtx = currentContext.embedAtContext
+    const matched = model ? [...model.base, ...model.conditional].map((entry) => entry.rule) : []
+    const inCtx = (rule: ParsedRule) => contextKeyOf(rule) === (embedCtx ?? '')
+    const anchor = selectedEmbedKey
+      ? (matched.find((rule) => rule.embedKey === selectedEmbedKey && inCtx(rule))
+          ?? matched.find((rule) => rule.embedKey === selectedEmbedKey))
+      : (matched.find(inCtx) ?? matched[0])
+    const doc = selectedEmbedKey
+      ? docByKey.get(selectedEmbedKey)
+      : (anchor ? docByKey.get(anchor.embedKey) : [...docByKey.values()][0])
+    const region = anchor && doc && anchor.embedKey === doc.source.key
+      ? doc.regions[anchor.regionIndex]
+      : doc?.regions[0]
+    if (!doc || !region) { setStatus('No embed here to write to — add an HTML embed first.'); return }
+    void (async () => {
+      setBusyBoth(true)
+      setStatus('Saving…')
+      try {
+        // Use a placeholder prop so createRuleAtRoot returns true; we replace the rule's
+        // body with the nested pseudo before writeEmbedDoc, so the placeholder never
+        // reaches the persisted CSS.
+        const block = embedCtx ? listAtRuleBlocks(region).find((b) => b.atContext.join(' › ') === embedCtx) : null
+        const ok = block
+          ? createRuleInAtRule(block.node, selector, '__pseudo_placeholder__', '0', false)
+          : createRuleAtRoot(region, selector, '__pseudo_placeholder__', '0', false)
+        if (!ok) { setStatus('Nothing to save.'); return }
+        // Find the freshly-created rule and rewrite its body to nest the pseudo.
+        const created = region.root
+          ? findChildRuleBySelector(region.root, selector)
+          : null
+        const createdInBlock = !created && block ? findChildRuleBySelector(block.node, selector) : null
+        if (created ?? createdInBlock) {
+          const target = created ?? createdInBlock
+          target!.removeAll()
+          const nested = postcss.rule({ selector: `&${pseudo}` })
+          applyDeclsToNested(nested, decls)
+          target!.append(nested)
+          target!.raws.semicolon = true
+        }
+        const res = await writeEmbedDoc(doc)
+        await refreshDerived()
+        if (!res.ok) {
+          if (inComponentRef.current && !doc.source.fromComponent) { markPending(doc.source.key); return }
+          setSaveError(res.error); return
+        }
+        clearPending(doc.source.key)
+        setStatus(`Added ${selector}.`)
+      } finally { setBusyBoth(false) }
+    })()
+  }, [selectedRule, applyEdit, autoSelectForEdit, currentContext, model, selectedEmbedKey, docByKey, refreshDerived, markPending, clearPending])
+  // Clear path: remove the nested `&<pseudo>` rule (if present) under selectedRule.
+  const clearPseudoBlock = useCallback((pseudo: string) => {
+    if (!selectedRule) return
+    const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase()
+    const want = norm(`&${pseudo}`)
+    let target: Rule | null = null
+    selectedRule.node.each((n) => {
+      if (!target && n.type === 'rule' && norm((n as Rule).selector) === want) target = n as Rule
+    })
+    if (!target) return
+    void applyEdit(selectedRule, () => { target!.remove() })
+  }, [selectedRule, applyEdit])
+  // Live (debounced) pseudo write — bypass CSS.supports (pseudo isn't a property),
+  // mutate the nested rule's body and push the embed straight away so the canvas
+  // reflects typing.
+  const liveSetPseudoBlock = useCallback((pseudo: string, declText: string) => {
+    if (!selectedRule) return
+    const decls = splitDeclText(declText)
+    const doc = docByKey.get(selectedRule.embedKey)
+    if (!doc) return
+    const nested = ensurePseudoRule(selectedRule.node, `&${pseudo}`)
+    // Capture a "revert origin" the first time we touch this pseudo — needed by the
+    // regular prop revert path so an abandoned live write puts things back.
+    const key = `&${pseudo}`
+    if (!liveOriginRef.current.has(key)) {
+      liveOriginRef.current.set(key, nestedDeclsAsText(nested) || null)
+    }
+    applyDeclsToNested(nested, decls)
+    void writeEmbedDoc(doc, true).then((res) => {
+      if (!res.ok && inComponentRef.current && !doc.source.fromComponent) markPending(doc.source.key)
+    })
+  }, [selectedRule, docByKey, markPending])
+
   // Scaffold: create the rule inside its query, then persist — mirrors applyEdit's
   // optimistic-refresh + deferred-save-in-component behavior.
   const onAddToPlaceholder = useCallback((placeholder: Placeholder, prop: string, value: string, important: boolean) => {
@@ -3780,6 +3943,12 @@ export default function EmbedEditor() {
     // A commit is the new baseline: whatever a live write overwrote on the way here is
     // no longer what "revert" should restore.
     liveOriginRef.current.delete(prop)
+    // Pseudo selectors (`::backdrop`, `:popover-open`) aren't CSS properties — they
+    // style a generated box / state via a NESTED rule (`&::backdrop { … }`), not a
+    // declaration. Route them through the pseudo-block helpers so the produced CSS is
+    // valid (avoid `::backdrop: value` decls) and bypass the propLayer/native path
+    // entirely.
+    if (prop.startsWith(':')) { setPseudoBlock(prop, value); return }
     if (!activeSelector) {
       const route = autoSelectForEdit()
       if (route && 'native' in route) { nativeSetOrFallback(route.native, prop, value, important); return }
@@ -3796,8 +3965,12 @@ export default function EmbedEditor() {
   const clearProp = (prop: string | string[]) => {
     const props = Array.isArray(prop) ? prop : [prop]
     props.forEach((p) => liveOriginRef.current.delete(p)) // clearing is a commit too
-    const nativeProps = props.filter((p) => propLayer(p) === 'native')
-    const embedProps = props.filter((p) => propLayer(p) === 'embed')
+    // Pseudo selectors are cleared by removing the nested rule entirely.
+    const pseudoProps = props.filter((p) => p.startsWith(':'))
+    pseudoProps.forEach((p) => { if (selectedRule) clearPseudoBlock(p) })
+    const remaining = props.filter((p) => !p.startsWith(':'))
+    const nativeProps = remaining.filter((p) => propLayer(p) === 'native')
+    const embedProps = remaining.filter((p) => propLayer(p) === 'embed')
     if (nativeProps.length && selectedNativeIndex != null) {
       void nativeClearAt(selectedNativeIndex, nativeProps, optionsFor(currentContext, stateKey))
     }
@@ -3816,6 +3989,11 @@ export default function EmbedEditor() {
     if (value === null) { revertProp(prop); return }
     // Normalize hsl()/hsla() → rgb/rgba first (Webflow's native API rejects hsl*).
     value = hslaToRgba(value)
+    // Pseudo selectors write via a nested rule, not a CSS declaration — `CSS.supports`
+    // would always return false (it expects `::backdrop` to be a property name, not a
+    // selector). Bypass the validity gate and route straight to the pseudo-block live
+    // writer, which mutates the AST directly.
+    if (prop.startsWith(':')) { liveSetPseudoBlock(prop, value); return }
     // Don't push half-typed / invalid values live: Webflow's native API errors on
     // them and gets stuck. Keep the last valid value applied until a complete valid
     // one is typed; the blur commit still runs authoritatively.

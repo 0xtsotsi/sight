@@ -49,7 +49,11 @@ const SCHEMAS = {
   ],
   dialog: [
     { name: 'open', type: 'boolean', default: false },
-    { name: 'closedby', type: 'enum', options: ['none', 'any', 'closerequest', 'auto'], default: 'none' },
+    // `closedby` is a valid HTML attribute on <dialog> per the popover spec,
+    // but the value set is `none | any | closerequest` — `auto` is not a
+    // recognized value. We also don't write a default: the attribute is
+    // optional, and emitting `closedby="none"` on every new dialog is noise.
+    { name: 'closedby', type: 'enum', options: ['none', 'any', 'closerequest'] },
   ],
   img: [
     { name: 'src', type: 'string' },

@@ -14,7 +14,7 @@ import { selectorKey } from './resolved'
 // A direct child rule of `container` whose selector is the SAME target as `selector`
 // (by selectorKey, so `.a.b` === `.b.a`) — used to merge into an existing rule rather
 // than appending a duplicate. Only direct children (not nested) so a flat add stays flat.
-function findChildRuleBySelector(container: Root | AtRule, selector: string): Rule | null {
+export function findChildRuleBySelector(container: Root | AtRule, selector: string): Rule | null {
   const key = selectorKey(selector)
   let found: Rule | null = null
   container.each((child) => {

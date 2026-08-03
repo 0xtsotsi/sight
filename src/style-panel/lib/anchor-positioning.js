@@ -22,7 +22,10 @@
 // here so the field can detect `anchor-size()` and offer a preset pick.
 
 const ANCHOR_NAME_KEYWORDS = new Set(['none', 'inherit', 'initial', 'unset', 'revert', 'revert-layer'])
-const POSITION_ANCHOR_KEYWORDS = new Set(['none', 'auto', 'inherit', 'initial', 'unset', 'revert', 'revert-layer'])
+// `position-anchor` accepts only `none | auto | <dashed-ident>`. The CSS-wide
+// keywords (inherit/initial/unset/revert/revert-layer) are NOT valid here —
+// they're handled by the cascade at the property level, not as values.
+const POSITION_ANCHOR_KEYWORDS = new Set(['none', 'auto'])
 const INSET_AREA_KEYWORDS = new Set([
   'none',
   'center', 'top', 'bottom', 'left', 'right',
