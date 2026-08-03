@@ -137,14 +137,23 @@ jobs:
         run: |
           set -euo pipefail
           pkg=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)')
-          # Tag should be dev-vX.Y.Z; strip the leading 'dev-v'.
-          tag_version="${TAG#dev-v}"
-          if [ "$pkg" != "$tag_version" ]; then
-            echo "✗ package.json version ($pkg) does not match tag ($TAG)"
-            echo "  Refusing to publish. Re-tag the right commit, or fix package.json."
-            exit 1
+          # For dev-v* tag pushes: TAG is 'dev-vX.Y.Z' and we strip the prefix.
+          # For workflow_dispatch from a branch: TAG is the branch name (no
+          # version), so skip the comparison — the release tag is whatever
+          # setup-release derived from package.json, which by construction
+          # matches.
+          if [[ "$TAG" == dev-v* ]]; then
+            tag_version="${TAG#dev-v}"
+            if [ "$pkg" != "$tag_version" ]; then
+              echo "✗ package.json version ($pkg) does not match tag ($TAG)"
+              echo "  Refusing to publish. Re-tag the right commit, or fix package.json."
+              exit 1
+            fi
+            echo "✓ package.json version ($pkg) matches tag ($TAG)"
+          else
+            echo "• workflow_dispatch from branch $TAG — skipping drift check"
+            echo "  release tag is dev-v${pkg} (set by setup-release)"
           fi
-          echo "✓ package.json version ($pkg) matches tag ($TAG)"
 
       - name: Verify both platforms uploaded, then publish
         env:
