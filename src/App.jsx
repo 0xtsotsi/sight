@@ -8,6 +8,7 @@ import StylePanel from './panels/StylePanel.jsx';
 import AgentPanel from './panels/AgentPanel.jsx';
 import AiPanel from './panels/AiPanel.jsx';
 import SettingsAi from './panels/SettingsAi.jsx';
+import TransitionsPanel from './panels/TransitionsPanel.jsx';
 import PreviewPane from './panels/PreviewPane.jsx';
 import GitChip from './panels/GitChip.jsx';
 import LeftRail from './ui/LeftRail.jsx';
@@ -2491,6 +2492,7 @@ export default function App() {
                 { id: 'settings', label: 'Settings' },
                 { id: 'ai', label: 'AI' },
                 { id: 'agent', label: 'Agent' },
+                { id: 'transitions', label: 'Transitions' },
               ].map((t) => (
                 <button
                   key={t.id}
@@ -2596,6 +2598,9 @@ export default function App() {
                 showToast={showToast}
                 onApplied={() => setRefreshKey((k) => k + 1)}
               />
+            )}
+            {rightTab === 'transitions' && project && (
+              <TransitionsPanel project={project} />
             )}
           </div>
         )}
