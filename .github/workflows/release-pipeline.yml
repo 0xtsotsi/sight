@@ -32,7 +32,7 @@ jobs:
           key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-electron-
-      - run: npm ci
+      - run: npm ci --legacy-peer-deps
       - run: npm run build
       - name: Validate mac signing secrets
         run: |
@@ -74,7 +74,7 @@ jobs:
           key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-electron-
-      - run: npm ci
+      - run: npm ci --legacy-peer-deps
       - run: npm run build
       - run: npx electron-builder --win --publish always
         env:

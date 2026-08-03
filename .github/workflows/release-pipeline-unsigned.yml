@@ -41,7 +41,7 @@ jobs:
           key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-electron-
-      - run: npm ci
+      - run: npm ci --legacy-peer-deps
       - run: npm run build
       - name: Build unsigned macOS app (no signing, no notarization)
         env:
@@ -72,7 +72,7 @@ jobs:
           key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-electron-
-      - run: npm ci
+      - run: npm ci --legacy-peer-deps
       - run: npm run build
       - name: Build unsigned Windows app
         env:
