@@ -3,6 +3,7 @@
 // (electron/main.js) inject `run` from this file and `spawn` from
 // child_process.
 
+const path = require('path');
 const vercel = require('./vercel');
 const netlify = require('./netlify');
 const cloudflare = require('./cloudflare');
@@ -64,6 +65,21 @@ function runDeploy({ provider, projectPath, distPath, projectName, token, spawn,
       reject(new Error('runDeploy requires an injected `spawn` function.'));
       return;
     }
+    // Pre-mark the provider-specific output paths so the chokidar
+    // watcher treats any files the CLI writes as self-writes (no
+    // spurious 'external change' toasts on a successful deploy).
+    const selfPaths = [
+      '.vercel',
+      '.netlify',
+      'dist',
+      '_routes.json',
+      'wrangler.toml',
+    ];
+    for (const p of selfPaths) {
+      const abs = path.join(spec.cwd, p);
+      try { markSelfWrite(abs); } catch { /* markSelfWrite must be a no-op on ENOENT */ }
+    }
+
     const child = spawn(spec.cmd, spec.args, {
       cwd: spec.cwd,
       env: { ...process.env, ...spec.env },

@@ -11,6 +11,7 @@
 // …)` so the modal can stream build + deploy logs without polling.
 
 const { spawn, execFile } = require('child_process');
+const path = require('path');
 const { runFullDeploy } = require('./manager');
 const { detectCli } = require('./cli-detect');
 
@@ -151,7 +152,16 @@ function register(ipcMain) {
   // Run `npm run build` standalone so the modal can show build output before
   // it commits to a deploy. Strips ANSI; never returns the token.
   ipcMain.handle('deploy:build', async (e, { projectPath } = {}) => {
-    if (!projectPath) throw new Error('projectPath is required.');
+    if (!openProjectRoot) throw new Error('No project is open.');
+    // Validate the renderer-supplied path against the authoritative
+    // open project, the same gate every other write IPC uses. Without
+    // this, a compromised renderer can trigger `npm run build` anywhere
+    // on disk (postinstall RCE, accidental deletion, exfil via build
+    // output, etc.) and then drive deploy:start to ship the artifact
+    // using the user's stored deploy token.
+    if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+      throw new Error('projectPath does not match the open project.');
+    }
     const sender = e.sender;
     const started = Date.now();
     sender.send('deploy:progress', { kind: 'build', stream: 'started' });
@@ -183,7 +193,10 @@ function register(ipcMain) {
   });
 
   ipcMain.handle('deploy:start', async (e, { projectPath, provider, branch } = {}) => {
-    if (!projectPath) throw new Error('projectPath is required.');
+    if (!openProjectRoot) throw new Error('No project is open.');
+    if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+      throw new Error('projectPath does not match the open project.');
+    }
     if (!provider) throw new Error('provider is required.');
     const sender = e.sender;
     const token = readToken(provider);
