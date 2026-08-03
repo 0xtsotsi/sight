@@ -401,12 +401,12 @@ export function renderHeadTags(head) {
 // parsed as JS. We escape both: `</` becomes `<\/` (the documented JSON-in-
 // HTML escape; `\/` is still a valid JSON escape for `/` and round-trips
 // through JSON.parse unchanged), and U+2028 / U+2029 are written as the
-// JSON escape sequences ` ` / ` `.
+// JSON escape sequences `\u2028` / `\u2029`.
 export function safeJsonStringify(value) {
   return JSON.stringify(value)
     .replace(/<\//g, '<\\/')
-    .replace(new RegExp(' ', 'g'), '\\u2028')
-    .replace(new RegExp(' ', 'g'), '\\u2029');
+    .replace(new RegExp('\u2028', 'g'), '\\u2028')
+    .replace(new RegExp('\u2029', 'g'), '\\u2029');
 }
 
 function escapeHtml(s) {
@@ -445,6 +445,12 @@ export function buildSocialPreviewHtml(seo) {
   const site = og.site_name || '';
   const image = og.image || '';
   const initials = (title.match(/\b\w/g) || []).slice(0, 2).join('').toUpperCase() || '··';
+  // Inline style for the OG card image. Hoisted out of the template literal
+  // because nested backticks confuse Rollup's parser.
+  const imageStyle = image
+    ? `background-image:url(${escapeAttr(image)})`
+    : '';
+  const imageClass = image ? 'has-image' : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -467,7 +473,7 @@ export function buildSocialPreviewHtml(seo) {
 <body>
   <div class="card">
     <div class="meta"><span class="dot"></span><span class="site">${escapeHtml(site || 'your-site.example')}</span></div>
-    <div class="image ${image ? 'has-image' : ''}" style="${image ? `background-image:url(${escapeAttr(image)})` : ''}">${escapeHtml(initials)}</div>
+    <div class="image ${imageClass}" style="${imageStyle}">${escapeHtml(initials)}</div>
     <h1 class="title">${escapeHtml(title)}</h1>
     <p class="desc">${escapeHtml(description)}</p>
     <p class="url">${escapeHtml(og.url || h.canonical || '')}</p>
