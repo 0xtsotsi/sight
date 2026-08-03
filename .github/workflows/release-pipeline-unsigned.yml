@@ -22,10 +22,54 @@ on:
   push:
     tags:
       - 'dev-v*'
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
+  # Create the draft release on sight-releases BEFORE the build jobs try
+  # to upload. Without this, electron-builder's --publish always fails
+  # with HTTP 404 because no release exists yet for the tag.
+  setup-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_version: ${{ steps.resolve.outputs.tag_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # For workflow_dispatch, ref_name is refs/heads/main. For tag
+          # pushes, ref_name is dev-vX.Y.Z. Derive version either way.
+          if [[ "$TAG" == dev-v* ]]; then
+            tag_version="${TAG#dev-v}"
+          else
+            tag_version=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)')
+          fi
+          echo "tag_version=$tag_version" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release on sight-releases (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_VERSION: ${{ steps.resolve.outputs.tag_version }}
+        run: |
+          set -euo pipefail
+          full_tag="dev-v${TAG_VERSION}"
+          status=$(gh release view "$full_tag" --repo 0xtsotsi/sight-releases --json name -q '.name' 2>/dev/null || echo '')
+          if [ -z "$status" ]; then
+            echo "Creating draft release $full_tag"
+            gh release create "$full_tag" \
+              --repo 0xtsotsi/sight-releases \
+              --title "Sight ${full_tag} (unsigned)" \
+              --notes "Unsigned test build of Sight v${TAG_VERSION}." \
+              --draft \
+              --prerelease
+          else
+            echo "Release $full_tag already exists"
+          fi
+
   build-mac:
+    needs: setup-release
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +87,7 @@ jobs:
             ${{ runner.os }}-electron-
       - run: npm ci --legacy-peer-deps
       - run: npm run build
+
       - name: Build unsigned macOS app (no signing, no notarization)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,6 +97,7 @@ jobs:
         run: npx electron-builder --mac --publish always -c.mac.forceCodeSigning=false -c.mac.notarize=false -c.mac.identity=null
 
   build-windows:
+    needs: setup-release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +115,7 @@ jobs:
             ${{ runner.os }}-electron-
       - run: npm ci --legacy-peer-deps
       - run: npm run build
+
       - name: Build unsigned Windows app
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,13 +156,7 @@ jobs:
               *) echo "missing $required — refusing to publish"; exit 1 ;;
             esac
           done
-          # Post a release-notes summary as a comment on the bump commit (if
-          # we can identify it). Best-effort — skipped if the bump commit
-          # can't be resolved.
           echo "✓ asset check passed; flipping draft to pre-release"
-          # Mark as pre-release (not latest) so the Sight auto-updater
-          # doesn't deliver it to end users. Unsigned binaries will trip
-          # Gatekeeper/SmartScreen warnings; pre-release is for testing.
           gh release edit "$TAG" --repo 0xtsotsi/sight-releases \
             --draft=false \
             --prerelease
