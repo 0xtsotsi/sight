@@ -106,6 +106,8 @@ export function emptySeoHead() {
     title: '',
     description: '',
     canonical: '',
+    charset: 'utf-8',
+    viewport: 'width=device-width, initial-scale=1',
     og: {
       title: '',
       description: '',
@@ -156,6 +158,8 @@ export function normalizeSeoHead(input) {
     title: String(input.title || ''),
     description: String(input.description || ''),
     canonical: String(input.canonical || ''),
+    charset: input.charset != null && String(input.charset).trim() !== '' ? String(input.charset) : 'utf-8',
+    viewport: input.viewport != null && String(input.viewport).trim() !== '' ? String(input.viewport) : 'width=device-width, initial-scale=1',
     og: {
       title: String(o.title || ''),
       description: String(o.description || ''),
@@ -353,6 +357,8 @@ export function buildAeoSchema(aeo) {
 export function renderHeadTags(head) {
   const h = normalizeSeoHead(head);
   const lines = [];
+  if (h.charset) lines.push(`<meta charset="${escapeAttr(h.charset)}" />`);
+  if (h.viewport) lines.push(`<meta name="viewport" content="${escapeAttr(h.viewport)}" />`);
   if (h.title) lines.push(`<title>${escapeHtml(h.title)}</title>`);
   if (h.description) lines.push(`<meta name="description" content="${escapeAttr(h.description)}" />`);
   if (h.canonical) lines.push(`<link rel="canonical" href="${escapeAttr(h.canonical)}" />`);
@@ -376,16 +382,32 @@ export function renderHeadTags(head) {
   if (h.twitter.image) lines.push(`<meta name="twitter:image" content="${escapeAttr(h.twitter.image)}" />`);
   const ld = buildJsonLd(h.jsonLdType, h.jsonLd);
   if (ld) {
-    lines.push(`<script type="application/ld+json">${JSON.stringify(ld)}</script>`);
+    lines.push(`<script type="application/ld+json">${safeJsonStringify(ld)}</script>`);
   }
   const aeo = buildAeoSchema(h.aeo);
   if (aeo.itemListElement.length) {
-    lines.push(`<script type="application/ld+json">${JSON.stringify(aeo)}</script>`);
+    lines.push(`<script type="application/ld+json">${safeJsonStringify(aeo)}</script>`);
   }
   return lines.join('\n');
 }
 
 // --- small HTML helpers --------------------------------------------------
+
+// JSON.stringify is safe inside a <script type="application/ld+json"> only
+// until a user-supplied string contains `</script>` — at which point the
+// HTML parser terminates the script element and the attacker controls the
+// rest of the document. U+2028 and U+2029 are also valid JSON output but
+// legal JS line terminators, so they would break out of a <script> tag
+// parsed as JS. We escape both: `</` becomes `<\/` (the documented JSON-in-
+// HTML escape; `\/` is still a valid JSON escape for `/` and round-trips
+// through JSON.parse unchanged), and U+2028 / U+2029 are written as the
+// JSON escape sequences ` ` / ` `.
+export function safeJsonStringify(value) {
+  return JSON.stringify(value)
+    .replace(/<\//g, '<\\/')
+    .replace(new RegExp(' ', 'g'), '\\u2028')
+    .replace(new RegExp(' ', 'g'), '\\u2029');
+}
 
 function escapeHtml(s) {
   return String(s)

@@ -370,7 +370,7 @@ export default function SeoPanel({
                 if (f.type === 'qaList') {
                   const items = Array.isArray(value) ? value : [];
                   return (
-                    <Field key={f.key} label={f.label}>
+                    <Field key={f.key} label={f.label} group>
                       <QaListEditor
                         items={items}
                         onChange={(next) => update((d) => {
@@ -384,7 +384,7 @@ export default function SeoPanel({
                 if (f.type === 'breadcrumbs') {
                   const items = Array.isArray(value) ? value : [];
                   return (
-                    <Field key={f.key} label={f.label}>
+                    <Field key={f.key} label={f.label} group>
                       <BreadcrumbEditor
                         items={items}
                         onChange={(next) => update((d) => {
@@ -490,7 +490,7 @@ export default function SeoPanel({
               onChange={(e) => update((d) => { d.aeo.answer = e.target.value; })}
             />
           </Field>
-          <Field label="Q&A pairs">
+          <Field label="Q&A pairs" group>
             <QaListEditor
               items={aeo.qa || []}
               onChange={(next) => update((d) => { d.aeo.qa = next; })}
@@ -549,16 +549,24 @@ function Section({ id, label, open, onToggle, children }) {
   );
 }
 
-function Field({ label, hint, warn, children }) {
-  return (
-    <label className={`seo-field ${warn ? 'warn' : ''}`}>
+function Field({ label, hint, warn, children, group }) {
+  // A `<label>` wrapping multiple controls is broken: browsers associate the
+  // label with the first focusable child and click-to-focus only affects that
+  // one. For multi-control groups (Q&A pairs, breadcrumb lists, ...) we render
+  // a `<div>` and rely on each control's own label/aria-label.
+  const inner = (
+    <>
       <span className="seo-field-label">
         {label}
         {hint && <span className="seo-field-hint">{hint}</span>}
       </span>
       {children}
-    </label>
+    </>
   );
+  if (group) {
+    return <div className={`seo-field ${warn ? 'warn' : ''}`}>{inner}</div>;
+  }
+  return <label className={`seo-field ${warn ? 'warn' : ''}`}>{inner}</label>;
 }
 
 function RepeatableRows({ rows, makeRow, render, onChange }) {

@@ -209,3 +209,69 @@ test('renderHeadTags HTML-escapes user input', () => {
   const html = renderHeadTags({ title: 'A & B < "C"' });
   assert.match(html, /<title>A &amp; B &lt; "C"<\/title>/);
 });
+
+test('renderHeadTags emits charset and viewport meta tags by default', () => {
+  const html = renderHeadTags({ title: 'X' });
+  assert.match(html, /<meta charset="utf-8" \/>/);
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1" \/>/);
+});
+
+test('renderHeadTags honors user-overridden charset and viewport', () => {
+  const html = renderHeadTags({
+    title: 'X',
+    charset: 'iso-8859-1',
+    viewport: 'width=320',
+  });
+  assert.match(html, /<meta charset="iso-8859-1" \/>/);
+  assert.match(html, /<meta name="viewport" content="width=320" \/>/);
+});
+
+test('renderHeadTags escapes </script> in JSON-LD payload so it cannot break out of the <script> tag', () => {
+  const html = renderHeadTags({
+    title: 'X',
+    jsonLdType: 'Article',
+    jsonLd: { headline: '</script><img src=x onerror=alert(1)>' },
+  });
+  // The <script> tag must close on the literal `</script>` the renderer emitted,
+  // not on the user-supplied one. JSON.parse still tolerates `\/` because that's
+  // a valid JSON escape for `/`.
+  const scriptMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  assert.ok(scriptMatch, 'JSON-LD script tag should be present');
+  const body = scriptMatch[1];
+  assert.ok(!body.includes('</script>'), 'JSON-LD body must not contain a literal `</script>`');
+  assert.ok(body.includes('<\\/script>'), 'JSON-LD body should escape `<` as `\\/`');
+  // The escaped JSON must still parse to the original payload.
+  const parsed = JSON.parse(body);
+  assert.equal(parsed.headline, '</script><img src=x onerror=alert(1)>');
+});
+
+test('renderHeadTags escapes </script> in AEO payload the same way', () => {
+  const html = renderHeadTags({
+    title: 'X',
+    aeo: { answer: '</script><svg onload=alert(1)>', qa: [] },
+  });
+  const scripts = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
+  assert.ok(scripts.length >= 1);
+  const aeoScript = scripts[scripts.length - 1];
+  assert.ok(!aeoScript[1].includes('</script>'), 'AEO body must not contain `</script>`');
+  const parsed = JSON.parse(aeoScript[1]);
+  assert.equal(parsed.itemListElement[0].item.text, '</script><svg onload=alert(1)>');
+});
+
+test('renderHeadTags escapes U+2028 and U+2029 in JSON-LD payloads', () => {
+  const html = renderHeadTags({
+    title: 'X',
+    jsonLdType: 'Article',
+    jsonLd: { headline: 'line one line two line three' },
+  });
+  const m = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  assert.ok(m);
+  // U+2028 / U+2029 are valid JSON but are illegal line terminators in JS, so
+  // a <script> tag parsed as JS would break out of a string literal. We always
+  // escape them so the renderer is safe whichever way the browser interprets
+  // the body.
+  assert.ok(!m[1].includes(' '), 'U+2028 must be escaped in JSON-LD body');
+  assert.ok(!m[1].includes(' '), 'U+2029 must be escaped in JSON-LD body');
+  const parsed = JSON.parse(m[1]);
+  assert.equal(parsed.headline, 'line one line two line three');
+});
