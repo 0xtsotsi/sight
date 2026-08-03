@@ -1433,10 +1433,22 @@ ipcMain.handle('assets:toSrcAssets', async (_e, { projectPath, rel }) => {
 // Read-only image probe: returns dimensions, mime, and size for an asset under
 // public/. The width/height feed the <Image> default props so the props panel
 // has a sensible starting point without the user having to look it up.
+//
+// image-size throws TypeError('unsupported file type') on buffers it can't
+// decode — eg a stray .txt renamed to .png, or a non-image file the user
+// dragged in. Surface that as `{ error: 'unsupported' }` so the renderer can
+// show a friendly "not an image" message instead of an uncaught exception
+// in the IPC pipe.
 ipcMain.handle('assets:probeImage', async (_e, { projectPath, rel }) => {
   const abs = assetAbs(projectPath, rel);
   const buf = fs.readFileSync(abs);
-  const dims = imageSize.imageSize(buf);
+  let dims;
+  try {
+    dims = imageSize.imageSize(buf);
+  } catch (err) {
+    if (err instanceof TypeError) return { error: 'unsupported' };
+    return { error: err.message || String(err) };
+  }
   let mime = 'application/octet-stream';
   if (dims.type) {
     const map = {

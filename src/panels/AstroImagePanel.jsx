@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ASTRO_IMAGE_DEFAULTS } from '../elementSchemas/astro-image.js';
+import { requestAsset } from '../assetPick.js';
 
 const FORMAT_OPTIONS = ['avif', 'webp', 'png', 'jpg', 'jpeg', 'gif', 'svg'];
 
@@ -156,6 +157,59 @@ function AltField({ value, defaultValue, onChange }) {
   );
 }
 
+// src has to be a real asset (Astro renders <img src=""> as a broken-image box
+// otherwise), so the field doubles as an asset chooser when empty. A red
+// border plus the "(empty — click Choose image…)" line makes the empty
+// state impossible to miss in the props panel.
+function SrcField({ value, onChange, mediaKind = 'image' }) {
+  const raw = readProp(value, '');
+  const v = String(raw ?? '').trim();
+  const empty = !v;
+  return (
+    <div className="props-field">
+      <label>
+        <span className="prop-label">src</span>
+      </label>
+      <input
+        value={v}
+        spellCheck={false}
+        placeholder="/img/hero.jpg"
+        style={empty ? { borderColor: 'var(--red)' } : undefined}
+        onChange={(e) => onChange(encode(e.target.value, 'string'))}
+      />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginTop: 6,
+          flexWrap: 'wrap',
+        }}
+      >
+        <button
+          type="button"
+          className="primary"
+          style={{ padding: '2px 10px', fontSize: 11 }}
+          onClick={() =>
+            requestAsset({
+              mediaKind,
+              current: v.startsWith('/') ? v.slice(1) : null,
+              onPick: (rel) => onChange({ type: 'string', value: '/' + rel }),
+            })
+          }
+        >
+          Choose image…
+        </button>
+        {empty && (
+          <span style={{ fontSize: 11, color: 'var(--red)' }}>
+            (empty — pick an image from public/)
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TextField({ name, value, placeholder, onChange }) {
   const v = readProp(value, '');
   return (
@@ -198,10 +252,8 @@ export default function AstroImagePanel({ node, onChange }) {
         responsive <code>srcset</code> with AVIF/WebP variants.
       </div>
 
-      <TextField
-        name="src"
+      <SrcField
         value={get('src')}
-        placeholder="…"
         onChange={(v) => onChange('src', v)}
       />
       <AltField

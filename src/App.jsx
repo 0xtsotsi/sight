@@ -23,7 +23,7 @@ import A11yPanel from './panels/A11yPanel.jsx';
 import ContentPanel from './panels/ContentPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
 import { builtinComponents } from './elementSchemas/astro-image.js';
-import { onAssetRequest, clearAssetRequest } from './assetPick.js';
+import { onAssetRequest, clearAssetRequest, requestAsset } from './assetPick.js';
 import { isDataBound } from './bindings.js';
 import {
   PreviewIcon,
@@ -918,6 +918,15 @@ export default function App() {
       const page = pageStateRef.current.currentPage;
       if (!comp || !page) return;
       const id = newId();
+      // Astro built-ins (Image/Picture) inserted via the palette — as opposed
+      // to the contextual "Convert to Astro image" action, which already has
+      // a file to point at — need the user to pick one. An empty `src` would
+      // render `<img src="">` in the preview (a confusing broken-image box
+      // with no signal that it's missing). Leave `src` unset so the
+      // AstroImagePanel can show an "open the asset picker" empty-state, and
+      // open the picker automatically so the user lands somewhere useful.
+      const isAstroImage = comp.isBuiltin && (comp.name === 'Image' || comp.name === 'Picture');
+      const props = isAstroImage ? { src: null } : {};
       if (comp.isBuiltin) {
         // Virtual components (astro:assets Image/Picture) have no file on
         // disk; the import path is fixed and the parser already recognises
@@ -926,7 +935,7 @@ export default function App() {
           if (!model.imports.some((i) => i.name === comp.name)) {
             model.imports.push({ name: comp.name, path: comp.importPath });
           }
-          const node = { id, kind: 'component', name: comp.name, props: {}, children: null };
+          const node = { id, kind: 'component', name: comp.name, props, children: null };
           insertIntoModel(model, node, target);
           return model;
         }, true);
@@ -939,14 +948,25 @@ export default function App() {
               path: chooseImportPath(model, paths),
             });
           }
-          const node = { id, kind: 'component', name: comp.name, props: {}, children: null };
+          const node = { id, kind: 'component', name: comp.name, props, children: null };
           insertIntoModel(model, node, target);
           return model;
         }, true);
       }
       setSelectedId(id);
+      // Astro image just dropped onto the page: there's no file yet, so
+      // straight-line into the asset picker. The picker's onPick closes
+      // itself, returning focus to the page.
+      if (isAstroImage) {
+        const { requestAsset } = await import('./assetPick.js');
+        requestAsset({
+          mediaKind: 'image',
+          current: null,
+          onPick: (rel) => setProp(id, 'src', { type: 'string', value: '/' + rel }, true),
+        });
+      }
     },
-    [insertables, mutateModel, resolveImportPath]
+    [insertables, mutateModel, resolveImportPath, setProp]
   );
 
   const moveNode = useCallback(

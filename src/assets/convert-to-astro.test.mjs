@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { convertToAstro, __test__ } from './convert-to-astro.js';
+
+// image-size is a CommonJS package; pull it through createRequire so an ESM
+// test runner can still exercise it.
+const require = createRequire(import.meta.url);
 
 const { IMPORT_NAME, rewritePageWithImage } = __test__;
 
@@ -272,4 +277,61 @@ test('convertToAstro falls back to sensible dims when probeImage throws', async 
     fileName: 'x.png',
   });
   assert.deepEqual(result.dims, { width: 1200, height: 800, mime: 'image/jpeg' });
+});
+
+// --- Bug: probe returning { error } (unsupported mime) --------------------
+//
+// The IPC handler now catches image-size's TypeError('unsupported file type')
+// and returns { error: 'unsupported' } instead of letting the exception leak
+// out. convertToAstro has to treat that shape as a missing probe, not as a
+// successful probe whose dims are missing — otherwise `dims` would be
+// `{ error: 'unsupported' }` and the props panel would have no defaults.
+test('convertToAstro falls back to sensible dims when probeImage returns { error: "unsupported" }', async () => {
+  const calls = [];
+  globalThis.window = {
+    avb: {
+      probeImage: async () => ({ error: 'unsupported' }),
+      moveToSrcAssets: async () => {
+        calls.push('moveToSrcAssets');
+        return { ok: true };
+      },
+      onFsChanged: () => {
+        calls.push('onFsChanged');
+      },
+    },
+  };
+  const result = await convertToAstro({
+    projectPath: '/proj',
+    rel: 'img/lying.png',
+    fileName: 'lying.png',
+  });
+  // Placeholder dims — a 4:3-ish jpeg — so the props panel has a sane start.
+  assert.deepEqual(result.dims, { width: 1200, height: 800, mime: 'image/jpeg' });
+  // The move still ran; the unsupported extension didn't stop the flow.
+  assert.ok(calls.includes('moveToSrcAssets'));
+});
+
+// --- Bug: image-size TypeError on non-image buffer ------------------------
+//
+// The `assets:probeImage` handler in electron/main.js wraps `imageSize` in
+// try/catch: a TypeError maps to { error: 'unsupported' }, anything else
+// maps to { error: <message> }. We exercise the same mapping here against
+// the real `image-size` package so the contract is documented in a test —
+// if image-size's error type ever changes, this fails before any
+// unsupported file can crash the renderer.
+test('probeImage contract: image-size throws TypeError on a non-image buffer', () => {
+  const imageSize = require('image-size');
+  // ASCII text with a .png extension: image-size can't parse it.
+  const buf = Buffer.from('this is not actually an image\n');
+  let caught;
+  try {
+    imageSize.imageSize(buf);
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught, 'imageSize should throw on a non-image buffer');
+  assert.ok(
+    caught instanceof TypeError,
+    `expected TypeError, got ${caught?.constructor?.name}: ${caught?.message}`
+  );
 });

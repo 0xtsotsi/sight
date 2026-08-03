@@ -88,6 +88,10 @@ export async function convertToAstro({ projectPath, rel, fileName }) {
       probe = null;
     }
   }
+  // The handler returns { error } for non-image buffers (eg an asset whose
+  // extension lies) — treat that the same as a missing probe, so the move
+  // still goes through with the sensible placeholder below.
+  if (probe && probe.error) probe = null;
   // Fallback so the props panel never has to special-case a missing probe.
   // 4:3-ish jpeg is a reasonable placeholder for whatever the user uploaded.
   const dims = probe || { width: 1200, height: 800, mime: 'image/jpeg' };
