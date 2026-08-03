@@ -46,15 +46,10 @@ jobs:
       - name: Build unsigned macOS app (no signing, no notarization)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          npx electron-builder --mac \
-            --publish always \
-            -c.mac.forceCodeSigning=false \
-            -c.mac.notarize=false \
-            -c.mac.identity=null
-          # EP_DRAFT stays true (electron-builder default for --publish
-          # always) so the publish job below can verify both platforms
-          # before flipping the release.
+        # Single-line run (no bash-style line continuations) for cross-shell
+        # compatibility — Windows runners use PowerShell which doesn't
+        # honor `\` at end-of-line the same way bash does.
+        run: npx electron-builder --mac --publish always -c.mac.forceCodeSigning=false -c.mac.notarize=false -c.mac.identity=null
 
   build-windows:
     runs-on: windows-latest
@@ -77,13 +72,7 @@ jobs:
       - name: Build unsigned Windows app
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          npx electron-builder --win \
-            --publish always
-          # Windows doesn't require signing for the binary to run, but
-          # SmartScreen will warn users. Acceptable for test builds.
-          # EP_DRAFT stays true so the publish job can flip after both
-          # platforms are uploaded.
+        run: npx electron-builder --win --publish always
 
   # Only now does the release become visible, marked as a pre-release so
   # the Sight auto-updater won't push it to end users.
