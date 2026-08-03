@@ -39,6 +39,7 @@ export default function AssetsPanel({ project, showToast, onOpenFile, pick, onPi
   const [cwd, setCwd] = useState('');
   const [renaming, setRenaming] = useState(null); // rel of entry being renamed
   const [newFolder, setNewFolder] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState(null); // {file, left, top}
   const [dragTarget, setDragTarget] = useState(null); // folder rel or '' (cwd)
   const cwdRef = useRef('');
   cwdRef.current = cwd;
@@ -132,6 +133,27 @@ export default function AssetsPanel({ project, showToast, onOpenFile, pick, onPi
     const clean = value.trim();
     if (!clean || clean === entry.name) return;
     act(() => window.avb.renameAsset({ projectPath: project.path, rel: entry.rel, newName: clean }));
+  };
+
+  // Convert a public/ image to a src/assets/ asset wired up with an <Image> /
+  // <Picture> insertion. The UI shows the menu only for image files; this
+  // guard is a second line in case someone wires the action up elsewhere.
+  const handleConvertToAstro = async (file) => {
+    if (!IMAGE_EXT.test(file.name)) return;
+    setCtxMenu(null);
+    const { convertToAstro } = await import('../assets/convert-to-astro.js');
+    try {
+      await convertToAstro({
+        projectPath: project.path,
+        rel: file.rel,
+        fileName: file.name,
+      });
+    } catch (err) {
+      showToast(
+        String(err?.message || err).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, ''),
+        'error'
+      );
+    }
   };
 
   // --- Breadcrumb ------------------------------------------------------
@@ -301,6 +323,11 @@ export default function AssetsPanel({ project, showToast, onOpenFile, pick, onPi
                 pick && pick.current === file.rel ? 'selected' : ''
               }`}
               draggable={renaming !== file.rel}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                if (!IMAGE_EXT.test(file.name)) return;
+                setCtxMenu({ file, left: e.clientX, top: e.clientY });
+              }}
               onDragStart={(e) => {
                 e.dataTransfer.setData('avb/asset', file.rel);
                 e.dataTransfer.effectAllowed = 'move';
@@ -341,6 +368,21 @@ export default function AssetsPanel({ project, showToast, onOpenFile, pick, onPi
           </div>
         )}
       </div>
+
+      {ctxMenu && (
+        <div
+          className="prop-menu"
+          style={{ left: ctxMenu.left, top: ctxMenu.top, position: 'fixed' }}
+          onMouseLeave={() => setCtxMenu(null)}
+        >
+          <div
+            className="prop-menu-item"
+            onClick={() => handleConvertToAstro(ctxMenu.file)}
+          >
+            Convert to Astro image
+          </div>
+        </div>
+      )}
     </div>
   );
 }

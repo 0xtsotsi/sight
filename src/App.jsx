@@ -22,7 +22,8 @@ import A11yPanel from './panels/A11yPanel.jsx';
 
 import ContentPanel from './panels/ContentPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
-import { onAssetRequest, clearAssetRequest } from './assetPick.js';
+import { builtinComponents } from './elementSchemas/astro-image.js';
+import { onAssetRequest, clearAssetRequest, requestAsset } from './assetPick.js';
 import { isDataBound } from './bindings.js';
 import {
   PreviewIcon,
@@ -399,8 +400,11 @@ export default function App() {
   // know about the component named X" has to search both lists, or a placed
   // layout would come back with no props, no slots and no rest support.
   // Components win a name collision: they're the more likely intent.
+  // Built-ins come from virtual imports (e.g. astro:assets) and have no
+  // .astro file on disk — they live in src/elementSchemas/astro-image.js so
+  // the props panel can still show their bespoke fields.
   const insertables = useMemo(
-    () => [...scan.components, ...scan.layouts],
+    () => [...builtinComponents, ...scan.components, ...scan.layouts],
     [scan.components, scan.layouts]
   );
 
@@ -913,22 +917,56 @@ export default function App() {
       const comp = insertables.find((c) => c.name === componentName);
       const page = pageStateRef.current.currentPage;
       if (!comp || !page) return;
-      const paths = await resolveImportPath(comp.path);
       const id = newId();
-      mutateModel((model) => {
-        if (!model.imports.some((i) => i.name === comp.name)) {
-          model.imports.push({
-            name: comp.name,
-            path: chooseImportPath(model, paths),
-          });
-        }
-        const node = { id, kind: 'component', name: comp.name, props: {}, children: null };
-        insertIntoModel(model, node, target);
-        return model;
-      }, true);
+      // Astro built-ins (Image/Picture) inserted via the palette — as opposed
+      // to the contextual "Convert to Astro image" action, which already has
+      // a file to point at — need the user to pick one. An empty `src` would
+      // render `<img src="">` in the preview (a confusing broken-image box
+      // with no signal that it's missing). Leave `src` unset so the
+      // AstroImagePanel can show an "open the asset picker" empty-state, and
+      // open the picker automatically so the user lands somewhere useful.
+      const isAstroImage = comp.isBuiltin && (comp.name === 'Image' || comp.name === 'Picture');
+      const props = isAstroImage ? { src: null } : {};
+      if (comp.isBuiltin) {
+        // Virtual components (astro:assets Image/Picture) have no file on
+        // disk; the import path is fixed and the parser already recognises
+        // <Image>/<Picture> as built-ins. Just splice the node in.
+        mutateModel((model) => {
+          if (!model.imports.some((i) => i.name === comp.name)) {
+            model.imports.push({ name: comp.name, path: comp.importPath });
+          }
+          const node = { id, kind: 'component', name: comp.name, props, children: null };
+          insertIntoModel(model, node, target);
+          return model;
+        }, true);
+      } else {
+        const paths = await resolveImportPath(comp.path);
+        mutateModel((model) => {
+          if (!model.imports.some((i) => i.name === comp.name)) {
+            model.imports.push({
+              name: comp.name,
+              path: chooseImportPath(model, paths),
+            });
+          }
+          const node = { id, kind: 'component', name: comp.name, props, children: null };
+          insertIntoModel(model, node, target);
+          return model;
+        }, true);
+      }
       setSelectedId(id);
+      // Astro image just dropped onto the page: there's no file yet, so
+      // straight-line into the asset picker. The picker's onPick closes
+      // itself, returning focus to the page.
+      if (isAstroImage) {
+        const { requestAsset } = await import('./assetPick.js');
+        requestAsset({
+          mediaKind: 'image',
+          current: null,
+          onPick: (rel) => setProp(id, 'src', { type: 'string', value: '/' + rel }, true),
+        });
+      }
     },
-    [insertables, mutateModel, resolveImportPath]
+    [insertables, mutateModel, resolveImportPath, setProp]
   );
 
   const moveNode = useCallback(

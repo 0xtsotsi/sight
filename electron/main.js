@@ -12,6 +12,7 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const imageSize = require('image-size');
 const { pathToFileURL } = require('url');
 const net = require('net');
 const os = require('os');
@@ -1407,6 +1408,59 @@ ipcMain.handle('assets:mkdir', async (_e, { projectPath, parentRel, name }) => {
   fs.mkdirSync(dir, { recursive: true });
   send('assets:changed', {});
   return { ok: true };
+});
+
+// Moves an asset from public/<rel> into src/assets/<rel> so it can be imported
+// by an Astro <Image> / <Picture> component. Creates src/assets/ if missing.
+// Both the source and the destination are marked as self-writes — the fs watcher
+// can otherwise treat our own move as an external change and re-load the page
+// model mid-flight, briefly dropping the user's selection.
+ipcMain.handle('assets:toSrcAssets', async (_e, { projectPath, rel }) => {
+  const from = assetAbs(projectPath, rel);
+  if (!fs.existsSync(from)) return { ok: false };
+  const srcAssetsDir = path.join(projectPath, 'src', 'assets');
+  const dest = path.join(srcAssetsDir, rel);
+  if (fs.existsSync(dest)) throw new Error(`src/assets/${rel} already exists.`);
+  fs.mkdirSync(srcAssetsDir, { recursive: true });
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  markSelfWrite(from);
+  markSelfWrite(dest);
+  fs.renameSync(from, dest);
+  send('assets:changed', {});
+  return { ok: true, destRel: rel };
+});
+
+// Read-only image probe: returns dimensions, mime, and size for an asset under
+// public/. The width/height feed the <Image> default props so the props panel
+// has a sensible starting point without the user having to look it up.
+//
+// image-size throws TypeError('unsupported file type') on buffers it can't
+// decode — eg a stray .txt renamed to .png, or a non-image file the user
+// dragged in. Surface that as `{ error: 'unsupported' }` so the renderer can
+// show a friendly "not an image" message instead of an uncaught exception
+// in the IPC pipe.
+ipcMain.handle('assets:probeImage', async (_e, { projectPath, rel }) => {
+  const abs = assetAbs(projectPath, rel);
+  const buf = fs.readFileSync(abs);
+  let dims;
+  try {
+    dims = imageSize.imageSize(buf);
+  } catch (err) {
+    if (err instanceof TypeError) return { error: 'unsupported' };
+    return { error: err.message || String(err) };
+  }
+  let mime = 'application/octet-stream';
+  if (dims.type) {
+    const map = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+      gif: 'image/gif', webp: 'image/webp', avif: 'image/avif',
+      svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon',
+      tiff: 'image/tiff', tif: 'image/tiff', heif: 'image/heif',
+      heic: 'image/heic',
+    };
+    mime = map[dims.type.toLowerCase()] || mime;
+  }
+  return { width: dims.width, height: dims.height, mime, size: buf.length };
 });
 
 // ---------------------------------------------------------------------------
