@@ -1,0 +1,146 @@
+name: Release (unsigned)
+
+# Test/dev-build variant of release-pipeline.yml. Skips macOS code-signing
+# and notarization so dev/test builds can run without Apple Developer
+# credentials. Triggers on `dev-v*` tags so they don't collide with the
+# production `v*` tags handled by release-pipeline.yml.
+#
+# Use cases:
+#   - Internal testing on a fresh checkout
+#   - Verifying the build pipeline before committing to a real release
+#   - Sharing unsigned artifacts with a small group who can right-click
+#     → Open to bypass Gatekeeper
+#
+# Out of scope:
+#   - Public releases (use release-pipeline.yml with the signing secrets
+#     set as repo secrets)
+#   - Auto-update delivery to end users (Sight's auto-updater expects
+#     signed assets from release-pipeline.yml)
+#
+# Manual usage:  gh workflow run release-pipeline-unsigned.yml --ref main
+on:
+  push:
+    tags:
+      - 'dev-v*'
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+      - run: npm ci
+      - run: npm run build
+      - name: Build unsigned macOS app (no signing, no notarization)
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          npx electron-builder --mac \
+            --publish always \
+            -c.mac.forceCodeSigning=false \
+            -c.mac.notarize=false \
+            -c.mac.identity=null
+          # EP_DRAFT stays true (electron-builder default for --publish
+          # always) so the publish job below can verify both platforms
+          # before flipping the release.
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+      - run: npm ci
+      - run: npm run build
+      - name: Build unsigned Windows app
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          npx electron-builder --win \
+            --publish always
+          # Windows doesn't require signing for the binary to run, but
+          # SmartScreen will warn users. Acceptable for test builds.
+          # EP_DRAFT stays true so the publish job can flip after both
+          # platforms are uploaded.
+
+  # Only now does the release become visible, marked as a pre-release so
+  # the Sight auto-updater won't push it to end users.
+  publish:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify tag matches package.json version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          pkg=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)')
+          # Tag should be dev-vX.Y.Z; strip the leading 'dev-v'.
+          tag_version="${TAG#dev-v}"
+          if [ "$pkg" != "$tag_version" ]; then
+            echo "✗ package.json version ($pkg) does not match tag ($TAG)"
+            echo "  Refusing to publish. Re-tag the right commit, or fix package.json."
+            exit 1
+          fi
+          echo "✓ package.json version ($pkg) matches tag ($TAG)"
+
+      - name: Verify both platforms uploaded, then publish
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          assets=$(gh release view "$TAG" --repo 0xtsotsi/sight-releases \
+            --json assets --jq '[.assets[].name] | join(" ")')
+          echo "assets: $assets"
+          for required in latest-mac.yml latest.yml; do
+            case " $assets " in
+              *" $required "*) ;;
+              *) echo "missing $required — refusing to publish"; exit 1 ;;
+            esac
+          done
+          # Post a release-notes summary as a comment on the bump commit (if
+          # we can identify it). Best-effort — skipped if the bump commit
+          # can't be resolved.
+          echo "✓ asset check passed; flipping draft to pre-release"
+          # Mark as pre-release (not latest) so the Sight auto-updater
+          # doesn't deliver it to end users. Unsigned binaries will trip
+          # Gatekeeper/SmartScreen warnings; pre-release is for testing.
+          gh release edit "$TAG" --repo 0xtsotsi/sight-releases \
+            --draft=false \
+            --prerelease
+
+      - name: Notify via Discord (if webhook configured)
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "no DISCORD_RELEASE_WEBHOOK secret set; skipping"
+            exit 0
+          fi
+          payload=$(printf '{"content":"🧪 Sight %s (unsigned/pre-release) — https://github.com/0xtsotsi/sight-releases/releases/tag/%s"}' "$TAG" "$TAG")
+          curl -fsS -H 'Content-Type: application/json' -d "$payload" "$DISCORD_WEBHOOK" \
+            || { echo "webhook post failed (non-fatal)"; }
