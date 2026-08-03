@@ -2443,6 +2443,7 @@ export default function App() {
         selection={selectedId}
         settings={{ device, inPreview }}
         recents={recents}
+        scan={scan}
         actions={{
           togglePreview: () => (inPreview ? exitPreview() : enterPreview()),
           setDevice,
@@ -2455,14 +2456,14 @@ export default function App() {
           openInsertPalette: () => setInsertOpen(true),
           setLeftTab,
           openFile,
-          openRecent: async (projectPath) => { await loadProject(projectPath); },
+          openRecent: (projectPath) =>
+            loadProject(projectPath).catch((err) => showToast(cleanError(err), 'error')),
           jumpToNode: (id) => {
             // Select the node and bump reveal so the navigator scrolls it
             // into view (mirrors what the preview already does on click).
             setSelectedId(id);
             setRevealTick((t) => t + 1);
           },
-          scan,
         }}
       />
     </div>

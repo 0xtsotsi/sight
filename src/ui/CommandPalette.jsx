@@ -27,6 +27,7 @@ export default function CommandPalette({
   selection,
   settings,
   recents,
+  scan,
   actions,
 }) {
   const [open, setOpen] = useState(false);
@@ -45,13 +46,13 @@ export default function CommandPalette({
         selection,
         settings,
         recents,
-        actions,
+        actions: { ...actions, scan },
       }),
-    // We intentionally exclude `actions` — those are passed by reference and
-    // change every render; rebuilding on every keystroke would tank perf.
+    // We intentionally exclude the `actions` callbacks — they are passed by
+    // reference and change every render. All enumerated *data* must be a dep.
     // Re-build when any of the data the registry enumerates changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project, page, model, selection, settings?.device, settings?.inPreview, recents]
+    [project, page, model, selection, settings?.device, settings?.inPreview, recents, scan]
   );
 
   // Apply our own filtering (cheap, deterministic, group-aware) and then
@@ -121,21 +122,14 @@ export default function CommandPalette({
   if (!open) return null;
 
   return (
-    <div
-      className="cmdk-overlay"
-      onMouseDown={(e) => {
-        // Click on the dim overlay closes; clicks inside the modal don't
-        // bubble up here.
-        if (e.target === e.currentTarget) setOpen(false);
-      }}
+    <Command.Dialog
+      open={open}
+      onOpenChange={setOpen}
+      label="Command palette"
+      shouldFilter={false}
+      overlayClassName="cmdk-overlay"
+      contentClassName="cmdk-modal"
     >
-      <Command.Dialog
-        open={open}
-        onOpenChange={setOpen}
-        label="Command palette"
-        shouldFilter={false}
-        className="cmdk-modal"
-      >
         <div className="cmdk-input-row">
           <CommandIcon size={14} style={{ color: 'var(--color-text-tertiary, #888)', marginRight: 8 }} />
           <Command.Input
@@ -167,7 +161,7 @@ export default function CommandPalette({
           {grouped.map(({ group, items }) => {
             const GroupIcon = iconForGroup(group);
             return (
-              <Command.Group key={group} heading={group} className="cmdk-group">
+              <Command.Group key={group} className="cmdk-group">
                 <div className="cmdk-group-label">
                   <GroupIcon size={11} style={{ marginRight: 6, verticalAlign: -2 }} />
                   {group}
@@ -202,6 +196,5 @@ export default function CommandPalette({
           <span>{totalMatches} {totalMatches === 1 ? 'result' : 'results'}</span>
         </div>
       </Command.Dialog>
-    </div>
   );
 }
