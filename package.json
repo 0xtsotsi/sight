@@ -1,7 +1,7 @@
 {
   "name": "sight",
   "productName": "Sight",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Sight — a visual builder for Astro projects — pages, layouts, components, props, live preview, and GitHub publishing.",
   "main": "electron/main.js",
   "author": "Timothy Ricks <hello@timothyricks.com>",
@@ -10,12 +10,11 @@
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build": "vite build",
     "start": "npm run build && electron .",
-    "test": "node --test --test-reporter=spec src/assets/convert-to-astro.test.mjs",
+    "test": "node --test src/agent/__tests__/credential.smoke.test.js src/agent/__tests__/tools.smoke.test.js src/agent/__tests__/systemPrompt.test.js src/agent/__tests__/client.test.js",
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac:unsigned": "npm run build && electron-builder --mac -c.mac.forceCodeSigning=false -c.mac.notarize=false -c.mac.identity=null",
-    "test": "node --test src/agent/__tests__/credential.smoke.test.js src/agent/__tests__/tools.smoke.test.js src/agent/__tests__/systemPrompt.test.js src/agent/__tests__/client.test.js",
     "agent:test": "node scripts/agent-smoke.cjs",
     "agent:test:fake": "SIGHT_AGENT_TEST_FAKE=1 node scripts/agent-smoke.cjs",
     "codegen:agent": "node scripts/codegen-agent.cjs"
