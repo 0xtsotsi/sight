@@ -55,18 +55,21 @@ jobs:
           TAG_VERSION: ${{ steps.resolve.outputs.tag_version }}
         run: |
           set -euo pipefail
-          full_tag="dev-v${TAG_VERSION}"
+          # electron-builder uploads to a release matching package.json's
+          # version (vX.Y.Z). We pre-create that release as a draft+prerelease
+          # so the unsigned build never accidentally becomes 'latest'.
+          full_tag="v${TAG_VERSION}"
           status=$(gh release view "$full_tag" --repo 0xtsotsi/sight-releases --json name -q '.name' 2>/dev/null || echo '')
           if [ -z "$status" ]; then
             echo "Creating draft release $full_tag"
             gh release create "$full_tag" \
               --repo 0xtsotsi/sight-releases \
               --title "Sight ${full_tag} (unsigned)" \
-              --notes "Unsigned test build of Sight v${TAG_VERSION}." \
+              --notes "Unsigned test build of Sight v${TAG_VERSION}. Marked pre-release so the Sight auto-updater won't deliver to end users." \
               --draft \
               --prerelease
           else
-            echo "Release $full_tag already exists"
+            echo "Release $full_tag already exists (electron-builder will reuse it)"
           fi
 
   build-mac:
@@ -161,17 +164,38 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          assets=$(gh release view "$TAG" --repo 0xtsotsi/sight-releases \
-            --json assets --jq '[.assets[].name] | join(" ")')
+          set -euo pipefail
+          # electron-builder always uploads to a release named after the
+          # package.json version (vX.Y.Z), regardless of the workflow tag.
+          # The setup-release job pre-created a draft at the same vX.Y.Z
+          # name so electron-builder has somewhere to upload. We find it
+          # by listing releases and looking for the vX.Y.Z draft.
+          pkg=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)')
+          expected="v${pkg}"
+          echo "Looking for release $expected on sight-releases"
+          # If our draft is named differently (e.g. dev-vX.Y.Z) we need to
+          # rename the underlying release so end users don't see "draft"
+          # for a signed release. For now, we look up by package.json.
+          release_json=$(gh release view "$expected" --repo 0xtsotsi/sight-releases --json assets,name,isDraft,isPrerelease 2>/dev/null || echo '{}')
+          assets=$(echo "$release_json" | jq -r '(.assets // []) | map(.name) | join(" ")')
+          echo "release name: $(echo "$release_json" | jq -r '.name // "not found"')"
           echo "assets: $assets"
+          if [ -z "$assets" ] || [ "$assets" = "null" ]; then
+            echo "✗ release $expected has no assets — refusing to publish"
+            echo "  This usually means electron-builder uploaded to a"
+            echo "  different release than expected (check setup-release)."
+            exit 1
+          fi
           for required in latest-mac.yml latest.yml; do
             case " $assets " in
               *" $required "*) ;;
               *) echo "missing $required — refusing to publish"; exit 1 ;;
             esac
           done
-          echo "✓ asset check passed; flipping draft to pre-release"
-          gh release edit "$TAG" --repo 0xtsotsi/sight-releases \
+          echo "✓ asset check passed; marking release as pre-release"
+          # Unsigned releases must never become 'latest' (Sight auto-updater
+          # would push to end users). Pre-release is the safe choice.
+          gh release edit "$expected" --repo 0xtsotsi/sight-releases \
             --draft=false \
             --prerelease
 
