@@ -622,6 +622,22 @@ contextBridge.exposeInMainWorld('avb', {
     ipcRenderer.on(`menu:${channel}`, listener);
     return () => ipcRenderer.removeListener(`menu:${channel}`, listener);
   },
+
+  // Deploy (Vercel / Netlify / Cloudflare). The renderer never sees the
+// token — only set/has/clear + the orchestrating build/start calls.
+  deploySetToken: invoke('deploy:setToken'),
+  deployHasToken: invoke('deploy:hasToken'),
+  deployClearToken: invoke('deploy:clearToken'),
+  deployDetectCli: invoke('deploy:detectCli'),
+  deployStatus: invoke('deploy:status'),
+  deployBuild: invoke('deploy:build'),
+  deployStart: invoke('deploy:start'),
+  deployList: () => Promise.resolve([]),
+  onDeployProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('deploy:progress', listener);
+    return () => ipcRenderer.removeListener('deploy:progress', listener);
+  },
   nativeCopy: invoke('native:copy'),
   nativePaste: invoke('native:paste'),
 
