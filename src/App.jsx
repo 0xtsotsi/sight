@@ -385,17 +385,14 @@ export default function App() {
   // scrolls the row into view — a counter, not the id, so clicking the same
   // element twice still reveals it.
   const [revealTick, setRevealTick] = useState(0);
-  const [rightTab, setRightTab] = useState('style');
+  const [rightTab, setRightTab] = useState('style'); // style | settings | head
   const [a11yOpen, setA11yOpen] = useState(false);
   const [a11yResults, setA11yResults] = useState(null); // style | settings | ai
   const [aiOpen, setAiOpen] = useState(false);
-  // Sliding highlight behind the active Style/Settings tab, measured from the
-
-  const [rightTab, setRightTab] = useState('style'); // style | settings | head
   // Sliding highlight behind the active Style/Settings/Head tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
   const rightTabRefs = useRef({});
-  const [rightTabInd, setRightTabInd] = useState(null);
+  const [rightTabInd, setRightTabInd] = useState(0);
   // The asset request a field is waiting on, and the tab to go back to once
   // it's answered — "Choose Image…" borrows the left panel rather than
   // opening a window over the canvas.
