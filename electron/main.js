@@ -180,8 +180,14 @@ ipcMain.handle('a11y:runAudit', (event) => {
   return cached || { results: [], violations: [], passes: 0, incomplete: 0, score: null, lastRunAt: null };
 });
 ipcMain.handle('a11y:setRuleOverrides', async (event, { projectPath, overrides } = {}) => {
-  if (!projectPath) throw new Error('Project path is required');
-  const dir = path.join(projectPath, '.sight');
+  if (!openProjectRoot) throw new Error('No project is open.');
+  // Gate against the authoritative open project, the same pattern
+  // every other write IPC uses. The renderer cannot use this to write
+  // .sight/a11y.json anywhere on the user's filesystem.
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
+  const dir = path.join(openProjectRoot, '.sight');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'a11y.json');
   markSelfWrite(file);

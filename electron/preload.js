@@ -11,7 +11,20 @@ if (!process.isMainFrame) {
       if (document.getElementById('sight-axe-core')) return;
       const script = document.createElement('script');
       script.id = 'sight-axe-core';
-      script.src = 'file://' + __dirname + '/node_modules/axe-core/axe.min.js';
+      // __dirname is the electron/ directory at runtime; axe-core is
+      // installed at the app root by npm. In a packaged build the
+      // dependency is hoisted to resources/app.asar/node_modules —
+      // walk up from there to find it.
+      const path = require('path');
+      const fs = require('fs');
+      const candidates = [
+        path.join(__dirname, '..', 'node_modules', 'axe-core', 'axe.min.js'),
+        path.join(__dirname, '..', '..', 'node_modules', 'axe-core', 'axe.min.js'),
+        path.join(__dirname, '..', '..', '..', 'node_modules', 'axe-core', 'axe.min.js'),
+      ];
+      const axePath = candidates.find((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
+      if (!axePath) throw new Error('axe-core not found. Run `npm install` at the app root.');
+      script.src = 'file://' + axePath;
       script.onload = () => {
         // Vite HMR swaps <style> tags and component chunks under the preview;
         // a 500ms debounce collapses a burst of edits into one audit. Without
