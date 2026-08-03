@@ -50,7 +50,8 @@ jobs:
 
       - name: Create draft release on sight-releases (idempotent)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_VERSION: ${{ steps.resolve.outputs.tag_version }}
         run: |
           set -euo pipefail
@@ -90,7 +91,8 @@ jobs:
 
       - name: Build unsigned macOS app (no signing, no notarization)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # Single-line run (no bash-style line continuations) for cross-shell
         # compatibility — Windows runners use PowerShell which doesn't
         # honor `\` at end-of-line the same way bash does.
@@ -118,7 +120,8 @@ jobs:
 
       - name: Build unsigned Windows app
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --publish always
 
   # Only now does the release become visible, marked as a pre-release so
@@ -144,7 +147,8 @@ jobs:
 
       - name: Verify both platforms uploaded, then publish
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           assets=$(gh release view "$TAG" --repo 0xtsotsi/sight-releases \
