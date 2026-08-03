@@ -2594,7 +2594,14 @@ const aiProviderList = [
 ];
 
 function aiDecryptKey(enc) {
+  if (!enc) return null;
   try {
+    // In-memory fallback used when safeStorage isn't available: the buffer
+    // is ASCII "plain:<key>". Decrypt that here so ai:hasKey/ai:editNode
+    // can still read the key back for the lifetime of the process.
+    if (typeof enc === 'string') return enc.startsWith('plain:') ? enc.slice(6) : enc;
+    const text = enc.toString('utf8');
+    if (text.startsWith('plain:')) return text.slice(6);
     if (!safeStorage.isEncryptionAvailable()) return null;
     return safeStorage.decryptString(enc).toString('utf8');
   } catch {
@@ -2634,6 +2641,17 @@ ipcMain.handle('ai:editNode', async (_e, args) => {
   if (!pagePath || !nodeId || !instruction || !provider) {
     return { ok: false, error: 'Missing required arguments.' };
   }
+  // Sandbox the page path to the open project. A renderer cannot use this
+  // IPC to write to arbitrary files on the user's filesystem.
+  let absPage;
+  try {
+    absPage = assertInProject(pagePath);
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  if (projectPath) {
+    try { assertInProject(projectPath); } catch (err) { return { ok: false, error: err?.message || String(err) }; }
+  }
   const meta = aiProviderList.find((p) => p.id === provider);
   if (!meta) return { ok: false, error: 'Unknown provider.' };
   let key;
@@ -2647,7 +2665,7 @@ ipcMain.handle('ai:editNode', async (_e, args) => {
   // provider (and validate the patch against it, never against stale state).
   let parsed;
   try {
-    parsed = parsePage(require('fs').readFileSync(pagePath, 'utf8'));
+    parsed = parsePage(require('fs').readFileSync(absPage, 'utf8'));
   } catch (err) {
     return { ok: false, error: 'Could not read page: ' + (err?.message || String(err)) };
   }
@@ -2683,10 +2701,9 @@ ipcMain.handle('ai:editNode', async (_e, args) => {
   if (!valid.ok) return { ok: false, error: valid.error, patch };
   // Apply via the normal write path with markSelfWrite so the watcher
   // doesn't bounce the change back at us as an external edit.
-  const absPage = path.resolve(pagePath);
   markSelfWrite(absPage);
   const result = applyPatchToFile({
-    pagePath,
+    pagePath: absPage,
     nodeId,
     patch,
     readFile: (p) => require('fs').readFileSync(p, 'utf8'),
@@ -2695,6 +2712,9 @@ ipcMain.handle('ai:editNode', async (_e, args) => {
       require('fs').writeFileSync(p, src, 'utf8');
     },
   });
+  // Include the patch in the success response so the renderer can show
+  // the diff and offer Accept/Reject without a separate round-trip.
+  if (result && result.ok) return { ...result, patch };
   return result;
 });
 

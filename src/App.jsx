@@ -6,6 +6,8 @@ import StructurePanel from './panels/StructurePanel.jsx';
 import PropsPanel from './panels/PropsPanel.jsx';
 import StylePanel from './panels/StylePanel.jsx';
 import AgentPanel from './panels/AgentPanel.jsx';
+import AiPanel from './panels/AiPanel.jsx';
+import SettingsAi from './panels/SettingsAi.jsx';
 import PreviewPane from './panels/PreviewPane.jsx';
 import GitChip from './panels/GitChip.jsx';
 import LeftRail from './ui/LeftRail.jsx';
@@ -379,6 +381,9 @@ export default function App() {
   const [rightTab, setRightTab] = useState('style');
   const [a11yOpen, setA11yOpen] = useState(false);
   const [a11yResults, setA11yResults] = useState(null); // style | settings
+
+  const [rightTab, setRightTab] = useState('style'); // style | settings | ai
+  const [aiOpen, setAiOpen] = useState(false);
   // Sliding highlight behind the active Style/Settings tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
   const rightTabRefs = useRef({});
@@ -2440,6 +2445,7 @@ export default function App() {
               {[
                 { id: 'style', label: 'Style' },
                 { id: 'settings', label: 'Settings' },
+                { id: 'ai', label: 'AI' },
                 { id: 'agent', label: 'Agent' },
               ].map((t) => (
                 <button
