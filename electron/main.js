@@ -2739,9 +2739,33 @@ registerDeployIpc(ipcMain);
 // ---------------------------------------------------------------------------
 
 function contentAbs(projectPath, rel) {
-  const abs = path.join(projectPath, rel);
-  if (!abs.startsWith(path.resolve(projectPath) + path.sep) && abs !== path.resolve(projectPath)) {
+  if (!openProjectRoot) {
+    throw new Error('No project is open.');
+  }
+  // First gate: the renderer-supplied projectPath must match the
+  // authoritative openProjectRoot. This stops a compromised renderer from
+  // asking us to read/write the filesystem at any path it likes.
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
+  const projectRoot = openProjectRoot;
+  const abs = path.resolve(projectRoot, String(rel || ''));
+  // Second gate: lexical containment under the project root.
+  if (!(abs + path.sep).startsWith(projectRoot + path.sep) && abs !== projectRoot) {
     throw new Error('Path escapes project root.');
+  }
+  // Third gate: real-path containment. A symlink under projectPath could
+  // resolve to a sibling like /Users/.../CorePrt-secrets-backup-2026-07-29.txt,
+  // which would still pass the lexical check above. realpath collapses the
+  // symlink so we can verify the target is genuinely inside the project.
+  try {
+    const real = fs.realpathSync(abs);
+    if (!(real + path.sep).startsWith(projectRoot + path.sep) && real !== projectRoot) {
+      throw new Error('Resolved path escapes project root.');
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT') return abs; // write target that doesn't exist yet
+    throw err;
   }
   return abs;
 }
@@ -2780,7 +2804,10 @@ function listCollectionsFromDisk(projectPath) {
 }
 
 ipcMain.handle('content:list', async (_e, projectPath) => {
-  if (!projectPath) throw new Error('projectPath required.');
+  if (!openProjectRoot) throw new Error('No project is open.');
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
   const parsed = parseProjectSchema(projectPath);
   // Schema is the source of truth for collection names — fall back to disk
   // only when the schema is missing or unparseable, so the editor still
@@ -2840,8 +2867,12 @@ ipcMain.handle('content:write', async (_e, { projectPath, rel, frontmatter, body
 // Read-only — does not touch the files. Matches the surrounding
 // `single-quote` / `double-quote` style the schema-parser produces.
 ipcMain.handle('content:usage', async (_e, { projectPath, rel }) => {
+  if (!openProjectRoot) throw new Error('No project is open.');
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
   const filename = String(rel || '').replace(/^.*\//, '').replace(/\.(md|mdx)$/i, '');
-  const root = path.join(projectPath, 'src');
+  const root = path.join(openProjectRoot, 'src');
   const refs = [];
   const visit = (dir) => {
     if (!fs.existsSync(dir)) return;
@@ -2870,6 +2901,10 @@ ipcMain.handle('content:usage', async (_e, { projectPath, rel }) => {
 });
 
 ipcMain.handle('content:schema', async (_e, projectPath) => {
+  if (!openProjectRoot) throw new Error('No project is open.');
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
   return parseProjectSchema(projectPath);
 });
 

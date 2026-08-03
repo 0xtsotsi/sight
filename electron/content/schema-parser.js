@@ -139,6 +139,9 @@ function transpile(source) {
 // `require` shim that only resolves the stub paths.
 function evaluateSchema(transpiled) {
   const sandboxRequire = (id) => {
+    // Hard allowlist. We never fall through to the real Node `require`,
+    // so a project that imports 'child_process' or any other module from
+    // its content.config.ts is rejected here, not silently executed.
     if (id === 'astro:content' || id === 'astro/collections') {
       return {
         image: imageHelper(),
@@ -147,25 +150,47 @@ function evaluateSchema(transpiled) {
         defineCollection,
       };
     }
-    // Some projects pull zod directly: `import { z } from 'zod'`.
     if (id === 'zod') return { z: zodStub };
-    // Otherwise try Node's normal resolver — most schemas won't import
-    // anything else, but if they do, we let it surface.
-    return require(id);
+    throw new Error(
+      `Unsupported import in content schema: ${JSON.stringify(id)}. ` +
+      'Only astro:content and zod are allowed.'
+    );
   };
   const module = { exports: {} };
   // Wrap so `module.exports` lands somewhere; matching CommonJS conventions.
   // The user's source uses ESM (import/export), but the transpiler
   // converted those to `require`/`module.exports`. We re-host that.
-  const fn = new Function(
-    'require',
-    'module',
-    'exports',
-    '__dirname',
-    '__filename',
-    transpiled
-  );
-  fn(sandboxRequire, module, module.exports, '/__schema', '/__schema.ts');
+  // Run the transpiled schema inside a vm.Context with a frozen global
+  // object. This still executes the project's schema (zod chains must
+  // evaluate to build a real schema), but it does so in a confined scope:
+  // no `process`, no `globalThis`, no built-in modules, no escape hatch.
+  // The sandbox require above is the only module loader available, and
+  // it does NOT fall through to Node's real require.
+  const vm = require('vm');
+  const sandbox = Object.create(null);
+  sandbox.module = module;
+  sandbox.exports = module.exports;
+  sandbox.require = sandboxRequire;
+  sandbox.__dirname = '/__schema';
+  sandbox.__filename = '/__schema.ts';
+  sandbox.console = console;
+  // Mark every property non-configurable / non-writable so the user
+  // code can't tamper with them mid-evaluation.
+  for (const k of Object.keys(sandbox)) {
+    Object.defineProperty(sandbox, k, {
+      value: sandbox[k],
+      writable: false,
+      configurable: false,
+    });
+  }
+  const ctx = vm.createContext(sandbox, {
+    name: 'sight-content-schema',
+    codeGeneration: { strings: false, wasm: false },
+  });
+  const script = new vm.Script(transpiled, {
+    filename: 'content.config.ts',
+  });
+  script.runInContext(ctx);
   return module.exports;
 }
 
