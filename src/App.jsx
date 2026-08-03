@@ -8,8 +8,8 @@ import StylePanel from './panels/StylePanel.jsx';
 import AgentPanel from './panels/AgentPanel.jsx';
 import AiPanel from './panels/AiPanel.jsx';
 import SettingsAi from './panels/SettingsAi.jsx';
-import PreviewPane from './panels/PreviewPane.jsx';
 import TransitionsPanel from './panels/TransitionsPanel.jsx';
+import PreviewPane from './panels/PreviewPane.jsx';
 import GitChip from './panels/GitChip.jsx';
 import LeftRail from './ui/LeftRail.jsx';
 import CodeWindow from './ui/CodeWindow.jsx';
@@ -386,8 +386,6 @@ export default function App() {
   const [a11yOpen, setA11yOpen] = useState(false);
   const [a11yResults, setA11yResults] = useState(null); // style | settings | ai
   const [aiOpen, setAiOpen] = useState(false);
-
-  const [rightTab, setRightTab] = useState('style'); // style | settings | transitions
   // Sliding highlight behind the active Style/Settings tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
   const rightTabRefs = useRef({});
@@ -1496,26 +1494,6 @@ export default function App() {
     return () => window.removeEventListener('message', onMsg);
   }, []);
 
-  // View-transitions forwarder for the interactive preview. Mirrors the
-  // wiring in PreviewPane: the iframe-side preload posts astro:transitions
-  // events up as { type: 'sight:vt', ... }, we forward them to main so
-  // the Transitions panel sees live traffic when the user is in preview.
-  useEffect(() => {
-    if (!inPreview) return undefined;
-    const onMsg = (e) => {
-      if (!previewIframeRef.current || e.source !== previewIframeRef.current.contentWindow) return;
-      const d = e.data;
-      if (d?.type !== 'sight:vt') return;
-      try {
-        window.avb?.postTransitionEvent?.(d);
-      } catch {
-        /* bridge not available */
-      }
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
-  }, [inPreview]);
-
   // Escape exits preview mode.
   useEffect(() => {
     if (!inPreview) return;
@@ -2569,10 +2547,6 @@ export default function App() {
                 }}
               />
             )}
-            {rightTab === 'transitions' && project && (
-              <TransitionsPanel project={project} />
-            )}
-            <div style={{ display: rightTab === 'settings' ? 'contents' : 'none' }}>
             <div style={{ display: rightTab === 'settings' ? 'contents' : 'none' }}>
             <PropsPanel
               node={selectedNode}
@@ -2624,6 +2598,9 @@ export default function App() {
                 showToast={showToast}
                 onApplied={() => setRefreshKey((k) => k + 1)}
               />
+            )}
+            {rightTab === 'transitions' && project && (
+              <TransitionsPanel project={project} />
             )}
           </div>
         )}

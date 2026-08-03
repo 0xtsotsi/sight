@@ -2280,8 +2280,16 @@ ipcMain.handle('dev:start', (_e, projectPath) => {
 let transitionLogActive = false;
 
 ipcMain.handle('viewTransitions:list', (_e, projectPath) => {
+  if (!openProjectRoot) {
+    return { transitions: [], pages: [], error: 'No project is open.' };
+  }
+  // Sandbox against the open project. Without this, a compromised renderer
+  // could ask the scanner to walk any directory on the user's filesystem.
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    return { transitions: [], pages: [], error: 'projectPath does not match the open project.' };
+  }
   try {
-    return transitionsScanner.scanProject(projectPath);
+    return transitionsScanner.scanProject(openProjectRoot);
   } catch (err) {
     return { transitions: [], pages: [], error: String(err && err.message || err) };
   }
