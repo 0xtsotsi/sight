@@ -30,6 +30,9 @@ const { normalizeAuditResults } = require('./a11y/audit');
 
 const lastAuditResults = new Map();
 
+const YAML = require('yaml');
+const { parseProjectSchema } = require('./content/schema-parser');
+
 let mainWindow = null;
 let devServer = null; // {proc, url, projectPath}
 
@@ -2727,3 +2730,181 @@ ipcMain.handle('shell:openExternal', async (_e, url) => {
 // held only in main's safeStorage-encrypted in-memory map; the renderer
 // never sees a token, only `hasToken` / `setToken` / `clearToken`.
 registerDeployIpc(ipcMain);
+
+// ---------------------------------------------------------------------------
+// Content collections (Astro) — read MDX/Markdown + frontmatter, list
+// collections declared in src/content.config.ts or src/content/config.ts, and
+// write edits back to disk while telling the file watcher to ignore our own
+// touch so the editor doesn't bounce.
+// ---------------------------------------------------------------------------
+
+function contentAbs(projectPath, rel) {
+  if (!openProjectRoot) {
+    throw new Error('No project is open.');
+  }
+  // First gate: the renderer-supplied projectPath must match the
+  // authoritative openProjectRoot. This stops a compromised renderer from
+  // asking us to read/write the filesystem at any path it likes.
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
+  const projectRoot = openProjectRoot;
+  const abs = path.resolve(projectRoot, String(rel || ''));
+  // Second gate: lexical containment under the project root.
+  if (!(abs + path.sep).startsWith(projectRoot + path.sep) && abs !== projectRoot) {
+    throw new Error('Path escapes project root.');
+  }
+  // Third gate: real-path containment. A symlink under projectPath could
+  // resolve to a sibling like /Users/.../CorePrt-secrets-backup-2026-07-29.txt,
+  // which would still pass the lexical check above. realpath collapses the
+  // symlink so we can verify the target is genuinely inside the project.
+  try {
+    const real = fs.realpathSync(abs);
+    if (!(real + path.sep).startsWith(projectRoot + path.sep) && real !== projectRoot) {
+      throw new Error('Resolved path escapes project root.');
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT') return abs; // write target that doesn't exist yet
+    throw err;
+  }
+  return abs;
+}
+
+// Walk src/content/<dir>/ for *.md and *.mdx files. We don't parse the
+// schema here — the renderer learns the schema via `content:schema` and
+// just lists the entries by directory. A config-less repo still works.
+function listCollectionsFromDisk(projectPath) {
+  const root = path.join(projectPath, 'src', 'content');
+  const out = [];
+  if (!fs.existsSync(root)) return out;
+  for (const dir of fs.readdirSync(root)) {
+    const full = path.join(root, dir);
+    try {
+      if (!fs.statSync(full).isDirectory()) continue;
+    } catch { continue; }
+    const entries = [];
+    const walk = (d) => {
+      for (const name of fs.readdirSync(d)) {
+        const p = path.join(d, name);
+        let st;
+        try { st = fs.statSync(p); } catch { continue; }
+        if (st.isDirectory()) { walk(p); continue; }
+        if (/\.(md|mdx)$/i.test(name)) {
+          entries.push({
+            rel: path.relative(projectPath, p).split(path.sep).join('/'),
+            name: name.replace(/\.(md|mdx)$/i, ''),
+          });
+        }
+      }
+    };
+    walk(full);
+    out.push({ name: dir, entries: entries.sort((a, b) => a.rel.localeCompare(b.rel)) });
+  }
+  return out;
+}
+
+ipcMain.handle('content:list', async (_e, projectPath) => {
+  if (!openProjectRoot) throw new Error('No project is open.');
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
+  const parsed = parseProjectSchema(projectPath);
+  // Schema is the source of truth for collection names — fall back to disk
+  // only when the schema is missing or unparseable, so the editor still
+  // loads on a brand-new project that hasn't written a config yet.
+  const fromDisk = listCollectionsFromDisk(projectPath);
+  if (parsed.collections.length) {
+    const names = new Set(parsed.collections.map((c) => c.name));
+    for (const d of fromDisk) if (!names.has(d.name)) names.add(d.name);
+    return {
+      configPath: parsed.configPath,
+      error: parsed.error || null,
+      collections: Array.from(names).map((name) => ({
+        name,
+        entries: (fromDisk.find((d) => d.name === name) || { entries: [] }).entries,
+      })).sort((a, b) => a.name.localeCompare(b.name)),
+    };
+  }
+  return { configPath: parsed.configPath, error: parsed.error || null, collections: fromDisk };
+});
+
+// Atomic .md / .mdx read: split on the first `---` boundary for YAML
+// frontmatter, return the rest as the body. Falls back to `{ frontmatter: {},
+// body: source }` for files without a fence so a stray draft isn't blank.
+function splitFrontmatter(source) {
+  const text = String(source == null ? '' : source);
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  if (!m) return { frontmatter: {}, body: text };
+  let fm = {};
+  try { fm = YAML.parse(m[1]) || {}; } catch { fm = {}; }
+  return { frontmatter: fm, body: text.slice(m[0].length) };
+}
+
+ipcMain.handle('content:read', async (_e, { projectPath, rel }) => {
+  const abs = contentAbs(projectPath, rel);
+  if (!/\.(md|mdx)$/i.test(abs)) throw new Error('Only .md / .mdx are supported.');
+  const source = fs.readFileSync(abs, 'utf8');
+  return { rel, ...splitFrontmatter(source) };
+});
+
+// Re-join frontmatter + body and write atomically. `markSelfWrite` keeps the
+// chokidar watcher from streaming the file back at the renderer.
+ipcMain.handle('content:write', async (_e, { projectPath, rel, frontmatter, body }) => {
+  const abs = contentAbs(projectPath, rel);
+  if (!/\.(md|mdx)$/i.test(abs)) throw new Error('Only .md / .mdx are supported.');
+  const fmYaml = frontmatter && Object.keys(frontmatter).length
+    ? YAML.stringify(frontmatter, { lineWidth: 0 }).trimEnd() + '\n'
+    : '';
+  const next = `---\n${fmYaml}---\n${String(body == null ? '' : body)}`;
+  const tmp = abs + '.sight-tmp';
+  markSelfWrite(abs);
+  fs.writeFileSync(tmp, next, 'utf8');
+  fs.renameSync(tmp, abs);
+  return { ok: true };
+});
+
+// Scan .astro files for getCollection('x') / getEntry('x', 'y') references.
+// Read-only — does not touch the files. Matches the surrounding
+// `single-quote` / `double-quote` style the schema-parser produces.
+ipcMain.handle('content:usage', async (_e, { projectPath, rel }) => {
+  if (!openProjectRoot) throw new Error('No project is open.');
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
+  const filename = String(rel || '').replace(/^.*\//, '').replace(/\.(md|mdx)$/i, '');
+  const root = path.join(openProjectRoot, 'src');
+  const refs = [];
+  const visit = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const name of fs.readdirSync(dir)) {
+      const p = path.join(dir, name);
+      let st; try { st = fs.statSync(p); } catch { continue; }
+      if (st.isDirectory()) { visit(p); continue; }
+      if (!/\.astro$/i.test(name)) continue;
+      const src = fs.readFileSync(p, 'utf8');
+      const re = /get(Collection|Entry)\s*\(\s*['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?/g;
+      let m;
+      while ((m = re.exec(src))) {
+        if (m[1] === 'Collection' && filename) {
+          if (m[2] === rel.split('/')[2] || m[2] === rel.replace(/^.*\//, '').split('/')[0]) {
+            refs.push({ file: path.relative(projectPath, p).split(path.sep).join('/'), kind: 'collection', collection: m[2] });
+          }
+        }
+        if (m[1] === 'Entry' && filename && m[3] === filename) {
+          refs.push({ file: path.relative(projectPath, p).split(path.sep).join('/'), kind: 'entry', collection: m[2], entry: m[3] });
+        }
+      }
+    }
+  };
+  visit(root);
+  return { references: refs };
+});
+
+ipcMain.handle('content:schema', async (_e, projectPath) => {
+  if (!openProjectRoot) throw new Error('No project is open.');
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
+  return parseProjectSchema(projectPath);
+});
+

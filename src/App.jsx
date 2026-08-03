@@ -19,6 +19,8 @@ import AssetsPanel from './panels/AssetsPanel.jsx';
 import CmsPanel from './panels/CmsPanel.jsx';
 import CmsView from './panels/CmsView.jsx';
 import A11yPanel from './panels/A11yPanel.jsx';
+
+import ContentPanel from './panels/ContentPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
 import { onAssetRequest, clearAssetRequest } from './assetPick.js';
 import { isDataBound } from './bindings.js';
@@ -355,7 +357,7 @@ export default function App() {
   const [busy, setBusy] = useState(null); // string message
   const [toast, setToast] = useState(null); // {msg, kind}
   const [refreshKey, setRefreshKey] = useState(0);
-  const [leftTab, setLeftTab] = useState('navigator'); // pages | navigator | components | assets | cms | null
+  const [leftTab, setLeftTab] = useState('navigator'); // pages | navigator | components | assets | cms | content | null
   const [cmsRel, setCmsRel] = useState(null); // JSON file open in the CMS editor
   const [cmsTick, setCmsTick] = useState(0); // bumped on save, refreshes counts
   const [cmsSettings, setCmsSettings] = useState(false); // editing that collection's fields
@@ -380,9 +382,7 @@ export default function App() {
   const [revealTick, setRevealTick] = useState(0);
   const [rightTab, setRightTab] = useState('style');
   const [a11yOpen, setA11yOpen] = useState(false);
-  const [a11yResults, setA11yResults] = useState(null); // style | settings
-
-  const [rightTab, setRightTab] = useState('style'); // style | settings | ai
+  const [a11yResults, setA11yResults] = useState(null); // style | settings | ai
   const [aiOpen, setAiOpen] = useState(false);
   // Sliding highlight behind the active Style/Settings tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
@@ -2304,6 +2304,12 @@ export default function App() {
                   setCmsRel(r);
                   setCmsSettings(true);
                 }}
+                showToast={showToast}
+              />
+            )}
+            {leftTab === 'content' && (
+              <ContentPanel
+                project={project}
                 showToast={showToast}
               />
             )}

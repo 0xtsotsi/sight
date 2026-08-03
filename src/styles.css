@@ -3227,6 +3227,67 @@ button.danger {
 }
 button.danger:hover:not(:disabled) {
   background: rgba(255, 80, 80, 0.08);
+/* Content collections editor — minimal MVP scope. FormFromSchema + MdxEditor
+   follow in a separate patch; this styles a split-pane list + JSON-raw editor. */
+.content-panel { display: flex; flex-direction: column; height: 100%; }
+.content-panel__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid var(--border-1);
+}
+.content-panel__head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.content-panel__empty,
+.content-panel__hint {
+  padding: 16px; color: var(--text-3, #888); font-size: 12px; line-height: 1.5;
+}
+.content-panel__error {
+  padding: 8px 12px; color: #c33; font-size: 12px;
+  border-bottom: 1px solid var(--border-1);
+}
+.content-panel__split {
+  display: grid; grid-template-columns: 220px 1fr;
+  flex: 1; min-height: 0;
+}
+.content-panel__collections {
+  overflow-y: auto; border-right: 1px solid var(--border-1);
+}
+.content-panel__collection-name {
+  padding: 8px 12px 4px; font-size: 11px;
+  text-transform: uppercase; color: var(--text-3, #888);
+  letter-spacing: 0.04em;
+}
+.content-panel__entry {
+  display: block; width: 100%; text-align: left;
+  padding: 6px 12px; background: transparent; border: 0;
+  cursor: pointer; font-size: 12px; color: inherit;
+}
+.content-panel__entry:hover { background: var(--bg-hover, rgba(0,0,0,0.04)); }
+.content-panel__entry.is-selected { background: var(--bg-selected, rgba(0,0,0,0.08)); }
+.content-panel__editor { display: flex; flex-direction: column; padding: 12px; min-width: 0; }
+.content-panel__path {
+  font-family: var(--font-mono, monospace); font-size: 11px;
+  color: var(--text-3, #888); margin-bottom: 8px;
+}
+.content-panel__label {
+  font-size: 11px; font-weight: 600; margin: 8px 0 4px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.content-panel__fm,
+.content-panel__body {
+  width: 100%; resize: vertical; min-height: 80px;
+  font-family: var(--font-mono, monospace); font-size: 12px;
+  padding: 8px; box-sizing: border-box;
+  background: var(--bg-input, #fff);
+  color: var(--text-1, inherit);
+  border: 1px solid var(--border-1, #ddd);
+  border-radius: 4px;
+}
+.content-panel__body { min-height: 200px; }
+.content-panel__actions {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 12px;
+}
+.content-panel__usage {
+  font-size: 11px; color: var(--text-3, #888);
 }
 
 .a11y-chip { margin-left: auto; min-height: 28px; border: 1px solid var(--border-strong); background: var(--bg-input); }
