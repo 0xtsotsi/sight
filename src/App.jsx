@@ -382,9 +382,7 @@ export default function App() {
   const [revealTick, setRevealTick] = useState(0);
   const [rightTab, setRightTab] = useState('style');
   const [a11yOpen, setA11yOpen] = useState(false);
-  const [a11yResults, setA11yResults] = useState(null); // style | settings
-
-  const [rightTab, setRightTab] = useState('style'); // style | settings | ai
+  const [a11yResults, setA11yResults] = useState(null); // style | settings | ai
   const [aiOpen, setAiOpen] = useState(false);
   // Sliding highlight behind the active Style/Settings tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
