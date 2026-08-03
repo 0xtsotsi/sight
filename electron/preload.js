@@ -740,4 +740,17 @@ contextBridge.exposeInMainWorld('avb', {
   // the file path or other settings keys. See electron/main.js
   // ipcMain.handle('agent:getCredential', ...).
   getAgentCredential: invoke('agent:getCredential'),
+  // AI inline-edit. Renderer never sees the API key value — `aiSetKey`
+  // sends it to main once and main stores it in safeStorage. Subsequent
+  // calls return only booleans / provider metadata.
+  aiSetKey: (providerId, key) => ipcRenderer.invoke('ai:setKey', { providerId, key }),
+  aiHasKey: (providerId) => ipcRenderer.invoke('ai:hasKey', providerId),
+  aiClearKey: (providerId) => ipcRenderer.invoke('ai:clearKey', providerId),
+  aiProviders: () => ipcRenderer.invoke('ai:providers'),
+  aiEditNode: (args) => ipcRenderer.invoke('ai:editNode', args),
+  onAiStream: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('ai:stream', listener);
+    return () => ipcRenderer.removeListener('ai:stream', listener);
+  },
 });
