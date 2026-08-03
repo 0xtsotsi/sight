@@ -12,6 +12,11 @@ const ADDITIONAL_PROPERTIES: readonly string[] = ['anchor-size', 'popover', 'clo
 // `known-css-properties` also lists @-rule descriptors (@font-face / @counter-style /
 // @property / @font-palette-values) and dead IE-isms that aren't element properties —
 // drop them so the list doesn't open on junk like `accelerator` / `additive-symbols`.
+const SCROLL_ANIMATION_PROPERTIES = [
+  'animation-timeline', 'animation-range', 'animation-range-start', 'animation-range-end',
+  'view-timeline-name', 'view-timeline-axis', 'scroll-timeline-name',
+]
+
 const NON_PROPERTIES = new Set([
   'accelerator', 'additive-symbols', 'alt', 'ascent-override', 'base-palette', 'behavior',
   'descent-override', 'fallback', 'font-display', 'inherits', 'initial-value',
@@ -28,6 +33,7 @@ export const CSS_PROPERTIES: readonly string[] = Object.freeze(
   [...new Set([
     ...all.filter((prop) => !prop.startsWith('--') && !NON_PROPERTIES.has(prop) && (!prop.startsWith('-') || prop.startsWith('-webkit-'))),
     ...ADDITIONAL_PROPERTIES,
+    ...SCROLL_ANIMATION_PROPERTIES,
   ])].sort((a, b) => {
     // Standard properties first (a leading `-` otherwise sorts the 260+ `-webkit-` names
     // to the very top, burying accent-color/align-*); alphabetical within each group.

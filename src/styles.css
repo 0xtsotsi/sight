@@ -3508,3 +3508,64 @@ button.danger:hover:not(:disabled) {
 .transitions-event-row { gap: 10px; }
 .transitions-event-name { color: var(--text); font-weight: 500; min-width: 110px; }
 .transitions-event-route { color: var(--text-faint); font-size: 10.5px; }
+
+
+/* Scroll-driven animations in the Style Panel */
+.scroll-animations {
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-2);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.scroll-animations-heading,
+.scroll-animations-keyframes-head,
+.scroll-animations-row,
+.scroll-animations-stop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scroll-animations-heading { justify-content: space-between; }
+.scroll-animations-heading > div { display: flex; flex-direction: column; gap: 2px; }
+.scroll-animations-heading strong { font-size: 12px; font-weight: 600; }
+.scroll-animations-heading span,
+.scroll-animations-note { color: var(--text-faint); font-size: 10px; line-height: 1.45; }
+.scroll-animations-baseline {
+  color: var(--green) !important;
+  border: 1px solid color-mix(in srgb, var(--green) 35%, transparent);
+  border-radius: 10px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.scroll-animations-row > label { width: 70px; flex: 0 0 70px; color: var(--text-dim); font-size: 11px; }
+.scroll-animations-row > :last-child { flex: 1; min-width: 0; }
+.scroll-animations-view-grid,
+.scroll-animations-range { display: flex; flex-direction: column; gap: 6px; }
+.scroll-animations-input { height: 28px; min-width: 0; font-family: var(--mono); font-size: 10.5px; }
+.scroll-animations-timeline {
+  width: 100%;
+  height: 44px;
+  border-radius: 6px;
+  background: var(--bg-input);
+  overflow: visible;
+}
+.scroll-animations-track { stroke: var(--border-strong); stroke-width: 3; stroke-linecap: round; }
+.scroll-animations-progress { fill: none; stroke: var(--accent); stroke-width: 2; }
+.scroll-animations-stop { fill: var(--bg-panel-2); stroke: var(--accent); stroke-width: 2; }
+.scroll-animations-playhead { stroke: var(--amber); stroke-width: 1.5; }
+.scroll-animations-keyframes-head { justify-content: space-between; color: var(--text-dim); font-size: 11px; }
+.scroll-animations-add { padding: 3px 7px; color: var(--accent); background: transparent; font-size: 10.5px; }
+.scroll-animations-keyframes { display: flex; flex-direction: column; gap: 5px; }
+.scroll-animations-stop-row { min-width: 0; }
+.scroll-animations-percent { width: 62px; flex: 0 0 62px; display: flex; align-items: center; position: relative; }
+.scroll-animations-percent input { padding-right: 18px; height: 28px; }
+.scroll-animations-percent span { position: absolute; right: 7px; color: var(--text-faint); pointer-events: none; }
+.scroll-animations-stop-row > .scroll-animations-input { flex: 1; }
+.scroll-animations-remove { width: 25px; height: 25px; padding: 0; background: transparent; color: var(--text-faint); font-size: 16px; }
+.scroll-animations-remove:hover:not(:disabled) { color: var(--red); }
+.scroll-animations-note { margin: 0; }
+.scroll-animations.is-disabled .scroll-animations-heading { margin-bottom: 1px; }
