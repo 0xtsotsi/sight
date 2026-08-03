@@ -1,5 +1,14 @@
 import { all } from 'known-css-properties'
 
+// CSS Anchor Position + Popover API properties that the upstream `known-css-properties`
+// list (v0.37.0) doesn't include yet. Merged + de-duped into CSS_PROPERTIES so the
+// add-property autocomplete suggests them. Upgrade `known-css-properties` and drop
+// this union when these names appear in `all`.
+//   anchor-size — the size() function family for reading the anchor's box
+//   popover — the popover attribute (auto / manual / hint)
+//   closedby — <dialog>'s closedby attribute (none / any / closerequest / auto)
+const ADDITIONAL_PROPERTIES: readonly string[] = ['anchor-size', 'popover', 'closedby']
+
 // `known-css-properties` also lists @-rule descriptors (@font-face / @counter-style /
 // @property / @font-palette-values) and dead IE-isms that aren't element properties —
 // drop them so the list doesn't open on junk like `accelerator` / `additive-symbols`.
@@ -16,9 +25,10 @@ const NON_PROPERTIES = new Set([
 // prefixes (`-moz-`/`-ms-`/`-o-`/`-epub-`/`-internal-`/…) are dropped as noise — the
 // standard property name already covers those. Sorted + de-duped once at load.
 export const CSS_PROPERTIES: readonly string[] = Object.freeze(
-  [...new Set(
-    all.filter((prop) => !prop.startsWith('--') && !NON_PROPERTIES.has(prop) && (!prop.startsWith('-') || prop.startsWith('-webkit-'))),
-  )].sort((a, b) => {
+  [...new Set([
+    ...all.filter((prop) => !prop.startsWith('--') && !NON_PROPERTIES.has(prop) && (!prop.startsWith('-') || prop.startsWith('-webkit-'))),
+    ...ADDITIONAL_PROPERTIES,
+  ])].sort((a, b) => {
     // Standard properties first (a leading `-` otherwise sorts the 260+ `-webkit-` names
     // to the very top, burying accent-color/align-*); alphabetical within each group.
     const av = a.startsWith('-') ? 1 : 0

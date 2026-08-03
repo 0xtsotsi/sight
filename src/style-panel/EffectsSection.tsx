@@ -8,6 +8,7 @@ import SegmentedField, { type SegOption } from './SegmentedField'
 import ColorSwatch from './components/ColorSwatch'
 import LayerList from './LayerList'
 import LayerPopover from './LayerPopover'
+import PopoverSubSection from './PopoverSubSection'
 import { CURSOR_ICONS } from './cursor-icons'
 import { ShadowNum, ShadowColorRow } from './ShadowFields'
 import { parseBoxShadows, serializeBoxShadows, blankBoxShadow, boxShadowLabel, type BoxShadow } from './lib/box-shadow'
@@ -993,6 +994,8 @@ export default function EffectsSection(props: Props) {
       <FiltersRow prop="backdrop-filter" label="Backdrop filters" props={props} />
 
       <ClipPathRow props={props} />
+
+      <PopoverSubSection {...props} />
 
       <PresetSelectRow prop="cursor" label="Cursor" options={CURSORS} presets={CURSOR_SET} fallback="auto" placeholder="cursor" props={props} allowCustom={false} />
 

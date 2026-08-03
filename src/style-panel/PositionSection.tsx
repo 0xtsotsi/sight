@@ -5,6 +5,7 @@ import FieldLabel from './components/FieldLabel'
 import ProvenanceList from './ProvenanceList'
 import VariableConnect from './VariableConnect'
 import { SpacingFill, useSpacingBox } from './SpacingBox'
+import AnchorPositioning from './AnchorPositioning'
 import { handleArrowStep } from './lib/number-step'
 import type { ResolvedProp } from './lib/resolved'
 
@@ -447,6 +448,8 @@ export default function PositionSection(props: Props) {
       <Row label={rowLabel('Clear', 'clear')}>
         <SegmentedIconControl prop="clear" ariaLabel="Clear" segments={CLEAR_SEGS} current={effVal(read, 'clear') || 'none'} {...props} />
       </Row>
+
+      <AnchorPositioning {...props} />
     </div>
   )
 }

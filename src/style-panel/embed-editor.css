@@ -4294,3 +4294,122 @@ textarea.embed-editor_value-input.is-expanded {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
 }
+
+/* ── Anchor positioning sub-section ── */
+.embed-editor_anchor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: var(--border-width-thin) solid var(--color-border-subtle);
+}
+.embed-editor_anchor-input-group {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.embed-editor_anchor-input-group .embed-editor_anchor-input { flex: 1 1 auto; min-width: 0; }
+.embed-editor_anchor-clear {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background: var(--bg-input);
+  border: var(--border-width-thin) solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.embed-editor_anchor-clear:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--bg-hover);
+}
+.embed-editor_anchor-clear:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.embed-editor_anchor-input {
+  width: 100%;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+.embed-editor_anchor-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+.embed-editor_anchor-note-label {
+  font-family: var(--font-family-mono);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.embed-editor_anchor-note-text {
+  color: var(--color-text-secondary);
+}
+
+/* ── Popover / dialog sub-section ── */
+.embed-editor_popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: var(--border-width-thin) solid var(--color-border-subtle);
+}
+.embed-editor_popover-input {
+  width: 100%;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+.embed-editor_popover-state {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+.embed-editor_popover-state-label {
+  font-family: var(--font-family-mono);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.embed-editor_popover-state-text {
+  color: var(--color-text-secondary);
+}
+
+/* Section header — the bold caption + hint line at the top of each sub-section.
+   The header sits inside the parent's grid (above the rows) so it has to span
+   the full row width: position row uses grid-template-columns of label + control,
+   so we override to a single block here. */
+.embed-editor_anchor-section-head,
+.embed-editor_popover-section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 var(--space-2) 0;
+  border-bottom: var(--border-width-thin) solid var(--color-border-subtle);
+  margin-bottom: var(--space-2);
+}
+.embed-editor_anchor-section-title,
+.embed-editor_popover-section-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0.2px;
+}
+.embed-editor_anchor-section-hint,
+.embed-editor_popover-section-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-normal);
+}
