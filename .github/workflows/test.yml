@@ -21,7 +21,13 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        # --legacy-peer-deps works around an ERESOLVE conflict between
+        # openai@4 (peer zod@^3.23.8) and @kenkaiiii/gg-agent@5.30.3
+        # (peer zod@^4.4.3). Both peers resolve at runtime; the conflict
+        # is purely a peer-dep metadata mismatch in the upstream openai
+        # package. Remove this flag once openai ships a major version
+        # that accepts zod@4.
+        run: npm ci --legacy-peer-deps
 
       - name: Run unit tests (credential lookup, tools, system prompt, client)
         run: npm test
