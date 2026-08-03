@@ -16,6 +16,7 @@ import CommandPalette from './ui/CommandPalette.jsx';
 import AssetsPanel from './panels/AssetsPanel.jsx';
 import CmsPanel from './panels/CmsPanel.jsx';
 import CmsView from './panels/CmsView.jsx';
+import A11yPanel from './panels/A11yPanel.jsx';
 import { getElementSchema, GLOBAL_ATTRS, canContainTag } from './elementSchemas.js';
 import { onAssetRequest, clearAssetRequest } from './assetPick.js';
 import { isDataBound } from './bindings.js';
@@ -375,7 +376,9 @@ export default function App() {
   // scrolls the row into view — a counter, not the id, so clicking the same
   // element twice still reveals it.
   const [revealTick, setRevealTick] = useState(0);
-  const [rightTab, setRightTab] = useState('style'); // style | settings
+  const [rightTab, setRightTab] = useState('style');
+  const [a11yOpen, setA11yOpen] = useState(false);
+  const [a11yResults, setA11yResults] = useState(null); // style | settings
   // Sliding highlight behind the active Style/Settings tab, measured from the
   // buttons so it tracks their real geometry (and any panel resize).
   const rightTabRefs = useRef({});
@@ -478,6 +481,61 @@ export default function App() {
       offExit();
       offLog();
     };
+  }, []);
+
+  useEffect(() => {
+    const off = window.avb.onA11yResults((data) => {
+      // Main pushes the normalized result on every fresh audit; the panel
+      // expects the panel-shaped object (with violations[] + score), so we
+      // pass the whole payload through.
+      if (data) setA11yResults(data);
+    });
+    return off;
+  }, []);
+
+  useEffect(() => {
+    if (!devUrl) return;
+    const timer = setTimeout(() => window.avb.runA11yAudit().then(setA11yResults).catch(() => {}), 500);
+    return () => clearTimeout(timer);
+  }, [devUrl, refreshKey]);
+
+  // Click-to-fix: the axe selector needs to be resolved to a model node id
+  // so the navigator can scroll to it. The preview iframe is cross-origin
+  // (Astro dev server vs Vite), so we can't query it from the parent — we
+  // postMessage it and let the sub-frame's preload read data-avb-p off the
+  // matching element.
+  const resolveCounterRef = useRef(0);
+  const resolveSelector = useCallback((selector) => {
+    return new Promise((resolve) => {
+      const requestId = ++resolveCounterRef.current;
+      let done = false;
+      const finish = (path) => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('message', handler);
+        clearTimeout(timer);
+        resolve(path || null);
+      };
+      const handler = (e) => {
+        const d = e.data;
+        if (d?.type !== 'sight:resolve-selector:result' || d.requestId !== requestId) return;
+        finish(d.path);
+      };
+      const timer = setTimeout(() => finish(null), 2000);
+      window.addEventListener('message', handler);
+      // The canvas iframe is the one with #avb-design in its src; the
+      // interactive preview is a different overlay iframe and shouldn't
+      // answer a11y lookups.
+      const iframe = document.querySelector('iframe[src*="#avb-design"]');
+      if (!iframe?.contentWindow) {
+        finish(null);
+        return;
+      }
+      iframe.contentWindow.postMessage(
+        { type: 'sight:resolve-selector', requestId, selector },
+        '*'
+      );
+    });
   }, []);
 
   // ----------------------------------------------------------------
@@ -2274,6 +2332,8 @@ export default function App() {
             focusPath={focusPath}
             device={device}
             onDevice={setDevice}
+            a11yResults={a11yResults}
+            onA11yOpen={() => setA11yOpen(true)}
             onSelectPath={(p) => {
               // Editing a component: the canvas still shows the whole page, so
               // a click in the dimmed area (or on nothing) means "I'm done in
@@ -2338,6 +2398,40 @@ export default function App() {
             <iframe ref={previewIframeRef} src={previewSrc} title="Site preview (interactive)" />
           </div>
         )}
+
+        <A11yPanel
+          results={a11yResults}
+          open={a11yOpen}
+          onClose={() => setA11yOpen(false)}
+          onFix={async (violation) => {
+            const selector = violation?.targets?.[0]?.selector;
+            if (!selector) {
+              setA11yOpen(false);
+              setRightTab('settings');
+              return;
+            }
+            const path = await resolveSelector(selector);
+            setA11yOpen(false);
+            if (path) {
+              const trail = path.split('.').map(Number);
+              const n = model && nodeAtPath(model.nodes, trail);
+              if (n) {
+                setSelectedId(n.id);
+                setLeftTab('navigator');
+                setRevealTick((t) => t + 1);
+                // Rules with a fix-template (image-alt, color-contrast, …)
+                // get the props panel so the user can apply the fix there.
+                if (violation.fixTemplate) setRightTab('settings');
+                return;
+              }
+            }
+            showToast(
+              `Couldn't locate the element for that violation on the canvas — open the Props panel to fix it manually.`,
+              'info'
+            );
+            setRightTab('settings');
+          }}
+        />
 
         {pageState?.editable && (
           <div className="panel right">

@@ -66,6 +66,8 @@ export default function PreviewPane({
   focusPath,
   device,
   onDevice,
+  a11yResults,
+  onA11yOpen,
 }) {
   // The breakpoint lives in App so a re-mount of this pane can't silently
   // kick the user out of a view (which would reload every preview iframe).
@@ -314,6 +316,7 @@ export default function PreviewPane({
             );
           })}
         </div>
+        <button className={`a11y-chip ${a11yResults?.score >= 90 ? 'good' : a11yResults?.violations?.length ? 'bad' : 'neutral'}`} onClick={onA11yOpen} aria-label="Open accessibility audit">A11y {a11yResults?.score ?? '—'}</button>
         <div className="device-btns">
           {indicator && <span className="device-indicator" style={indicator} />}
           {DEVICES.map(({ key, Icon, title }) => (

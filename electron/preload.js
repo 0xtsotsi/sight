@@ -4,6 +4,91 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // don't expose the app API to the previewed site — just report the page's
 // content height to the app so the canvas view can size frames to the page.
 if (!process.isMainFrame) {
+  // The privileged design iframe is the only sub-frame that receives axe.
+  // Loading it as a script keeps the app renderer isolated from page scripts.
+  if (location.hash.includes('avb-design')) {
+    const injectA11y = () => {
+      if (document.getElementById('sight-axe-core')) return;
+      const script = document.createElement('script');
+      script.id = 'sight-axe-core';
+      // __dirname is the electron/ directory at runtime; axe-core is
+      // installed at the app root by npm. In a packaged build the
+      // dependency is hoisted to resources/app.asar/node_modules —
+      // walk up from there to find it.
+      const path = require('path');
+      const fs = require('fs');
+      const candidates = [
+        path.join(__dirname, '..', 'node_modules', 'axe-core', 'axe.min.js'),
+        path.join(__dirname, '..', '..', 'node_modules', 'axe-core', 'axe.min.js'),
+        path.join(__dirname, '..', '..', '..', 'node_modules', 'axe-core', 'axe.min.js'),
+      ];
+      const axePath = candidates.find((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
+      if (!axePath) throw new Error('axe-core not found. Run `npm install` at the app root.');
+      script.src = 'file://' + axePath;
+      script.onload = () => {
+        // Vite HMR swaps <style> tags and component chunks under the preview;
+        // a 500ms debounce collapses a burst of edits into one audit. Without
+        // this the badge would re-score on every keystroke in the canvas.
+        let runTimer = null;
+        const sendError = (msg) => ipcRenderer.send('a11y:results', { error: String(msg) });
+        const runAudit = async () => {
+          try {
+            const result = await window.axe.run(document, { resultTypes: ['violations', 'passes', 'incomplete'] });
+            ipcRenderer.send('a11y:results', { results: result });
+          } catch (error) {
+            sendError(error);
+          }
+        };
+        const scheduleRun = () => {
+          clearTimeout(runTimer);
+          runTimer = setTimeout(runAudit, 500);
+        };
+        // Manual trigger from the parent (axe loaded but the page might still
+        // be settling on first paint).
+        window.addEventListener('sight:a11y:run', runAudit);
+        if (window.MutationObserver) {
+          new MutationObserver(scheduleRun).observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            characterData: true,
+          });
+        }
+        // First run after axe loads + a tick for the page to settle.
+        setTimeout(runAudit, 100);
+      };
+      (document.head || document.documentElement).appendChild(script);
+    };
+    if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', injectA11y); else injectA11y();
+
+    // Click-to-fix: parent asks us to resolve a CSS selector to a path.
+    // The iframe is cross-origin from the renderer (Astro dev server vs Vite),
+    // so we exchange messages via window.postMessage. Each request carries
+    // an id so concurrent calls don't get their answers crossed.
+    window.addEventListener('message', (e) => {
+      if (e.source !== window.parent) return;
+      const d = e.data;
+      if (d?.type !== 'sight:resolve-selector') return;
+      if (typeof d.selector !== 'string' || typeof d.requestId !== 'number') return;
+      let path = null;
+      let tag = null;
+      let html = '';
+      try {
+        const el = document.querySelector(d.selector);
+        if (el) {
+          path = el.getAttribute('data-avb-p');
+          tag = el.tagName ? el.tagName.toLowerCase() : null;
+          html = el.outerHTML ? el.outerHTML.slice(0, 200) : '';
+        }
+      } catch {
+        /* invalid selector — leave path null */
+      }
+      window.parent.postMessage(
+        { type: 'sight:resolve-selector:result', requestId: d.requestId, path, tag, html },
+        '*'
+      );
+    });
+  }
   // Design-mode frames (canvas + editor preview) are marked with #avb-design.
   // They get an editor cursor (no I-beam over text) and links/forms are
   // inert — navigation only happens in the interactive preview mode.
@@ -499,7 +584,16 @@ if (!process.isMainFrame) {
 
 const invoke = (channel) => (payload) => ipcRenderer.invoke(channel, payload);
 
+
 contextBridge.exposeInMainWorld('avb', {
+  runA11yAudit: invoke('a11y:runAudit'),
+  setA11yRuleOverrides: invoke('a11y:setRuleOverrides'),
+  onA11yResults: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('a11y:results', listener);
+    return () => ipcRenderer.removeListener('a11y:results', listener);
+  },
+
   // Project
   openProjectDialog: invoke('project:openDialog'),
   newProjectDialog: invoke('project:newDialog'),

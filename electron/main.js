@@ -32,6 +32,9 @@ const { importersOf } = require('./cmsRefs');
 const agentCredential = require('./agentCredential');
 const { register: registerDeployIpc } = require('./deploy/ipc');
 const { autoUpdater } = require('electron-updater');
+const { normalizeAuditResults } = require('./a11y/audit');
+
+const lastAuditResults = new Map();
 
 let mainWindow = null;
 let devServer = null; // {proc, url, projectPath}
@@ -172,6 +175,26 @@ function buildMenu() {
 
 // Native clipboard actions on the focused element, requested by the renderer
 // when a menu Copy/Paste lands while a text field has focus.
+ipcMain.handle('a11y:runAudit', (event) => {
+  const cached = lastAuditResults.get(event.sender.id);
+  return cached || { results: [], violations: [], passes: 0, incomplete: 0, score: null, lastRunAt: null };
+});
+ipcMain.handle('a11y:setRuleOverrides', async (event, { projectPath, overrides } = {}) => {
+  if (!openProjectRoot) throw new Error('No project is open.');
+  // Gate against the authoritative open project, the same pattern
+  // every other write IPC uses. The renderer cannot use this to write
+  // .sight/a11y.json anywhere on the user's filesystem.
+  if (path.resolve(String(projectPath || '')) !== openProjectRoot) {
+    throw new Error('projectPath does not match the open project.');
+  }
+  const dir = path.join(openProjectRoot, '.sight');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'a11y.json');
+  markSelfWrite(file);
+  fs.writeFileSync(file, JSON.stringify({ overrides: overrides || {} }, null, 2) + '\n');
+  return { ok: true };
+});
+
 ipcMain.handle('native:copy', () => {
   mainWindow?.webContents.copy();
   return { ok: true };
@@ -201,6 +224,38 @@ ipcMain.handle('native:paste', () => {
 // cached. We always read both files so a missing settings.json entry doesn't
 // shadow a valid auth.json token.
 ipcMain.handle('agent:getCredential', async () => agentCredential.getCredential());
+
+app.on('web-contents-created', (_event, contents) => {
+  // Sub-frame's preload sends a normalized axe report here. Sender id is the
+  // sub-frame's webContents; parent (the renderer) and main share electron
+  // module-level state, so this cache is keyed by sender id and read by
+  // a11y:runAudit. Origins of previews are user dev servers (http) while the
+  // renderer is Vite (http on a different port), so the iframe is cross-origin
+  // and the renderer can't query it directly — this IPC channel is the only
+  // reliable path.
+  contents.on('ipc-message', (event, channel, payload) => {
+    if (channel !== 'a11y:results') return;
+    const senderId = event.sender.id;
+    if (payload && payload.error) {
+      console.warn('[a11y] audit error from', senderId, payload.error);
+      lastAuditResults.set(senderId, { violations: [], passes: 0, incomplete: 0, score: 0, timestamp: Date.now() });
+      return;
+    }
+    if (!payload || !payload.results) return;
+    const normalized = normalizeAuditResults(payload.results);
+    lastAuditResults.set(senderId, normalized);
+    // Mirror the update to the parent renderer (the main window) so the
+    // panel re-renders without an explicit a11y:runAudit round-trip.
+    const parent = contents.getParentWebContents();
+    if (parent && !parent.isDestroyed()) parent.send('a11y:results', normalized);
+  });
+  // The sub-frame for the current page is recreated on every navigation /
+  // hard refresh; evict its cached audit so a stale score doesn't show
+  // against the next page.
+  contents.on('destroyed', () => {
+    lastAuditResults.delete(contents.id);
+  });
+});
 
 app.whenReady().then(() => {
   setApplicationIcon();

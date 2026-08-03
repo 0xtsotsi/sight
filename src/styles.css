@@ -3075,3 +3075,14 @@ body > .embed-editor_bg-modal-backdrop > .embed-editor_grid-modal {
   border-radius: 3px;
   color: var(--color-text-secondary, #a0a0a0);
 }
+
+.a11y-chip { margin-left: auto; min-height: 28px; border: 1px solid var(--border-strong); background: var(--bg-input); }
+.a11y-chip.good { color: var(--green); border-color: var(--green); }
+.a11y-chip.bad { color: var(--red); border-color: var(--red); }
+.a11y-panel { position: absolute; z-index: 20; right: 12px; bottom: 12px; width: min(420px, calc(100% - 24px)); max-height: 70%; overflow: auto; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 16px 48px #000b; }
+.a11y-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.a11y-header strong, .a11y-header span { display: block; } .a11y-header span { color: var(--text-dim); margin-top: 3px; }
+.a11y-score { padding: 18px 16px; display: flex; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--border); } .a11y-score b { font-size: 28px; } .a11y-score span { color: var(--text-dim); } .a11y-score.good b { color: var(--green); } .a11y-score.warn b { color: var(--amber); } .a11y-score.bad b { color: var(--red); }
+.a11y-group { padding: 12px 16px 0; } .a11y-group h3 { text-transform: capitalize; font-size: 11px; color: var(--text-dim); display: flex; justify-content: space-between; margin-bottom: 8px; }
+.a11y-violation { padding: 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; } .a11y-violation-title strong { display: block; line-height: 1.35; } .a11y-violation code { display: block; color: var(--text-dim); font-family: var(--mono); font-size: 10px; margin: 6px 0; overflow-wrap: anywhere; } .a11y-fix { padding: 5px 8px; color: var(--accent); background: transparent; border-color: var(--accent); } .a11y-empty { padding: 24px 16px; color: var(--text-dim); }
+@media (prefers-reduced-motion: reduce) { .a11y-panel, .a11y-chip { transition: none; } }
