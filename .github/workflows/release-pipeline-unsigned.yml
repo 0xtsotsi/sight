@@ -45,7 +45,7 @@ jobs:
       - run: npm run build
       - name: Build unsigned macOS app (no signing, no notarization)
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx electron-builder --mac \
             --publish always \
@@ -76,7 +76,7 @@ jobs:
       - run: npm run build
       - name: Build unsigned Windows app
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx electron-builder --win \
             --publish always
@@ -108,7 +108,7 @@ jobs:
 
       - name: Verify both platforms uploaded, then publish
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           assets=$(gh release view "$TAG" --repo 0xtsotsi/sight-releases \

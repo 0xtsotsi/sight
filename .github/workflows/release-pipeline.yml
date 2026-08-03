@@ -44,7 +44,7 @@ jobs:
       - run: npx electron-builder --mac --publish always
         env:
           DEBUG: electron-osx-sign*,electron-builder
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: "data:application/x-pkcs12;base64,${{ secrets.MAC_CSC_LINK }}"
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -78,7 +78,7 @@ jobs:
       - run: npm run build
       - run: npx electron-builder --win --publish always
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           EP_PRE_RELEASE: false
@@ -107,7 +107,7 @@ jobs:
 
       - name: Verify both platforms uploaded, then publish
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           assets=$(gh release view "$TAG" --repo 0xtsotsi/sight-releases \
