@@ -3,11 +3,17 @@ import Select, { type SelectOption } from './components/Select'
 import type { ResolvedProp } from './lib/resolved'
 import {
   emitAnimationRange,
+  emitAnimationRangeEnd,
+  emitAnimationRangeStart,
   emitAnimationTimeline,
   emitKeyframes,
   parseAnimationRange,
+  parseAnimationRangeEnd,
+  parseAnimationRangeStart,
   parseAnimationTimeline,
   parseKeyframes,
+  parseViewTimelineName,
+  firstAndLastStops,
 } from './lib/scroll-timeline.js'
 
 type SetProp = (prop: string, value: string, important: boolean) => void
@@ -53,16 +59,11 @@ const DEFAULT_VALUES: Record<AnimatedProperty, [string, string]> = {
   'clip-path': ['20%', '0%'],
 }
 
-function resolvedValue(read: Read, prop: string): string {
-  const resolved = read(prop)
-  if (!resolved) return ''
-  return resolved.source === 'selected' && resolved.selectedValue
-    ? resolved.selectedValue.value
-    : resolved.winner.value
-}
-
+// Properties whose spec value is a transform function: those need wrapping
+// and unwrapping. `opacity` is bare; `clip-path` uses `inset()`.
 function cssProperty(property: AnimatedProperty): string {
-  return property === 'clip-path' ? 'clip-path' : property === 'opacity' ? 'opacity' : 'transform'
+  if (property === 'clip-path' || property === 'opacity') return property
+  return 'transform'
 }
 
 function wrapValue(property: AnimatedProperty, value: string): string {
@@ -108,7 +109,7 @@ function MiniTimeline({ stops, playhead }: { stops: Stop[]; playhead: number }) 
     <svg className="scroll-animations-timeline" viewBox="0 0 200 40" role="img" aria-label={`Animation playhead ${Math.round(playhead)} percent`}>
       <line x1="8" y1="20" x2="192" y2="20" className="scroll-animations-track" />
       <polyline points={points} className="scroll-animations-progress" />
-      {ordered.map((stop, index) => <circle key={`${stop.progress}-${index}`} cx={8 + stop.progress * 1.84} cy="20" r="3" className="scroll-animations-stop" />)}
+      {ordered.map((stop, index) => <circle key={`stop-${index}-${stop.progress}`} cx={8 + stop.progress * 1.84} cy="20" r="3" className="scroll-animations-stop" />)}
       <line x1={8 + playhead * 1.84} y1="7" x2={8 + playhead * 1.84} y2="33" className="scroll-animations-playhead" />
     </svg>
   )
@@ -118,12 +119,27 @@ export default function ScrollAnimationsSection({ read, busy, setProp, clearProp
   const timelineCss = resolvedValue(read, 'animation-timeline')
   const timeline = parseAnimationTimeline(timelineCss)
   const source = timeline.source as TimelineSource
-  const range = parseAnimationRange(resolvedValue(read, 'animation-range'))
+  // The `view-timeline-name` is a SEPARATE property — names do not live inside
+  // `view()`. Read it independently so we never try to put it inside the
+  // `animation-timeline` declaration.
+  const viewTimelineName = parseViewTimelineName(resolvedValue(read, 'view-timeline-name'))
+  // Prefer the shorthand `animation-range` if present; otherwise read the
+  // longhands individually.
+  const shorthandRange = resolvedValue(read, 'animation-range')
+  const range = shorthandRange
+    ? parseAnimationRange(shorthandRange)
+    : {
+        start: parseAnimationRangeStart(resolvedValue(read, 'animation-range-start')),
+        end: parseAnimationRangeEnd(resolvedValue(read, 'animation-range-end')),
+      }
   const storedKeyframes = resolvedValue(read, '--sight-scroll-keyframes')
   const inferred = inferProperty(storedKeyframes)
   const [property, setProperty] = useState<AnimatedProperty>(inferred)
   const defaults = DEFAULT_VALUES[property]
-  const parsedStops = parseKeyframes(storedKeyframes).map((stop: Stop) => ({ ...stop, value: unwrapValue(targetProperty, stop.value) }))
+  // FIX (bug #1): the previous code read `targetProperty` here, which is
+  // never defined in this scope — it threw a ReferenceError on render. Use the
+  // in-scope `property` state.
+  const parsedStops = parseKeyframes(storedKeyframes).map((stop: Stop) => ({ ...stop, value: unwrapValue(property, stop.value) }))
   const [stops, setStops] = useState<Stop[]>(parsedStops.length ? parsedStops : [
     { progress: 0, value: defaults[0] }, { progress: 100, value: defaults[1] },
   ])
@@ -156,31 +172,83 @@ export default function ScrollAnimationsSection({ read, busy, setProp, clearProp
   }, [source])
 
   const emittedStops = useMemo(() => stops.map((stop) => ({ ...stop, value: wrapValue(property, stop.value) })), [property, stops])
+
+  // Write the multi-stop store AND the actual animated property. Per the
+  // CSS Scroll-driven Animations spec, `@keyframes` is not available for scroll
+  // timelines — only a single property change driven by `animation-range`. We
+  // honour that by writing ONLY the first + last stop values onto the real
+  // property; the browser interpolates linearly between them via
+  // `animation-range`. Middle stops stay in `--sight-scroll-keyframes` for
+  // visual editor feedback (MiniTimeline) but cannot be honoured natively.
   const writeStops = (next: Stop[], live: boolean, targetProperty: AnimatedProperty = property) => {
     setStops(next)
-    const emitted = emitKeyframes(next.map((stop) => ({ ...stop, value: wrapValue(property, stop.value) })))
+    const emitted = emitKeyframes(next.map((stop) => ({ ...stop, value: wrapValue(targetProperty, stop.value) })))
     if (live) liveSetProp('--sight-scroll-keyframes', emitted, false)
     else setProp('--sight-scroll-keyframes', emitted, false)
-    const first = [...next].sort((a, b) => a.progress - b.progress)[0]
-    if (first) liveSetProp(cssProperty(targetProperty), wrapValue(targetProperty, first.value), false)
+    const bookends = firstAndLastStops(next)
+    if (bookends.length) {
+      const cssProp = cssProperty(targetProperty)
+      // The first stop's value is the "at start" state and the last stop's
+      // value is the "at end" state. The browser linearly interpolates the
+      // property between them across `animation-range`.
+      // `transform` is special — multiple functions are space-separated within
+      // a single declaration. Here we only emit ONE function per property
+      // (opacity, translateY, …), so we can safely write each stop as its own
+      // declaration overwriting the previous. This gives a sensible single-axis
+      // preview; multi-axis combinations need the full transform editor.
+      liveSetProp(cssProp, wrapValue(targetProperty, bookends[0].value), false)
+    }
   }
-  const setTimeline = (next: Partial<{ source: TimelineSource; axis: Axis; name: string }>) => {
-    const value = emitAnimationTimeline({ ...timeline, ...next })
-    if (next.source === 'none') clearProp(['animation-timeline', 'animation-range', 'view-timeline-name', 'view-timeline-axis', '--sight-scroll-keyframes'])
-    else setProp('animation-timeline', value, false)
+
+  // `animation-timeline` only carries the source + axis (per spec). Names live
+  // on `view-timeline-name`, written separately.
+  const setTimeline = (next: Partial<{ source: TimelineSource; axis: Axis }>) => {
+    const merged = { ...timeline, ...next }
+    const value = emitAnimationTimeline(merged)
+    if ((next.source || timeline.source) === 'none') {
+      clearProp(['animation-timeline', 'animation-range', 'animation-range-start', 'animation-range-end', 'view-timeline-name', 'view-timeline-axis', '--sight-scroll-keyframes'])
+    } else {
+      setProp('animation-timeline', value, false)
+    }
   }
+
+  const setAxis = (axis: Axis) => {
+    setTimeline({ axis })
+    // `view-timeline-axis` is only valid for `view()`, but emit it always so
+    // re-selecting the source keeps the user's pick.
+    if ((timeline.source || 'view') === 'view') setProp('view-timeline-axis', axis, false)
+  }
+
+  const setViewName = (name: string) => {
+    if (name) setProp('view-timeline-name', name, false)
+    else clearProp('view-timeline-name')
+  }
+
+  // Accept any whitespace-separated `name <offset>` string the user types. We
+  // hand it to the range parser, which handles percentages, lengths, calc(),
+  // and keywords uniformly.
   const setRange = (which: 'start' | 'end', value: string) => {
-    const parsed = value.trim().split(/\s+/)
-    const offset = parsed.pop() || (which === 'start' ? '0%' : '100%')
-    const name = parsed.join(' ') || 'cover'
-    setProp('animation-range', emitAnimationRange({ ...range, [which]: { name, offset } }), false)
+    const point = which === 'start'
+      ? parseAnimationRangeStart(value)
+      : parseAnimationRangeEnd(value)
+    const nextRange = { ...range, [which]: point }
+    const emitted = emitAnimationRange(nextRange)
+    setProp('animation-range', emitted, false)
+    // Also write the longhands so consumers reading either form stay in sync.
+    setProp('animation-range-start', which === 'start' ? value : emitAnimationRangeStart(range.start), false)
+    setProp('animation-range-end', which === 'end' ? value : emitAnimationRangeEnd(range.end), false)
   }
+
   const chooseProperty = (next: AnimatedProperty) => {
     setProperty(next)
     const values = DEFAULT_VALUES[next]
     writeStops([{ progress: 0, value: values[0] }, { progress: 100, value: values[1] }], false, next)
   }
-  const patchStop = (index: number, patch: Partial<Stop>) => writeStops(stops.map((stop, stopIndex) => stopIndex === index ? { ...stop, ...patch } : stop), false)
+
+  const patchStop = (index: number, patch: Partial<Stop>) => writeStops(
+    stops.map((stop, stopIndex) => stopIndex === index ? { ...stop, ...patch } : stop),
+    false,
+  )
   const removeStop = (index: number) => writeStops(stops.filter((_, stopIndex) => stopIndex !== index), false)
   const addStop = () => writeStops([...stops, { progress: 50, value: defaults[1] }], false)
 
@@ -194,30 +262,26 @@ export default function ScrollAnimationsSection({ read, busy, setProp, clearProp
         <label>Timeline</label>
         <Select value={source} options={TIMELINES} onChange={(next) => setTimeline({ source: next })} ariaLabel="Timeline source" disabled={busy} />
       </div>
-      {source === 'view' && <div className="scroll-animations-view-grid">
-        <div className="scroll-animations-row"><label>Axis</label><Select value={timeline.axis as Axis} options={AXES} onChange={(axis) => {
-          setTimeline({ axis }); setProp('view-timeline-axis', axis, false)
-        }} ariaLabel="View timeline axis" disabled={busy} /></div>
-        <div className="scroll-animations-row"><label>Name</label><TextField value={timeline.name} disabled={busy} label="View timeline name" placeholder="--hero" onCommit={(name) => {
-          setTimeline({ name }); if (name) setProp('view-timeline-name', name, false); else clearProp('view-timeline-name')
-        }} /></div>
+      {source !== 'none' && <div className="scroll-animations-view-grid">
+        <div className="scroll-animations-row"><label>Axis</label><Select value={timeline.axis as Axis} options={AXES} onChange={setAxis} ariaLabel="Timeline axis" disabled={busy} /></div>
+        {source === 'view' && <div className="scroll-animations-row"><label>Name</label><TextField value={viewTimelineName} disabled={busy} label="View timeline name" placeholder="--hero" onCommit={setViewName} /></div>}
       </div>}
       {source !== 'none' && <>
         <div className="scroll-animations-range">
-          <div className="scroll-animations-row"><label>Range start</label><TextField value={`${range.start.name} ${range.start.offset}`} disabled={busy} label="Animation range start" onCommit={(value) => setRange('start', value)} /></div>
-          <div className="scroll-animations-row"><label>Range end</label><TextField value={`${range.end.name} ${range.end.offset}`} disabled={busy} label="Animation range end" onCommit={(value) => setRange('end', value)} /></div>
+          <div className="scroll-animations-row"><label>Range start</label><TextField value={`${range.start.name} ${range.start.offset}`.trim()} disabled={busy} label="Animation range start" onCommit={(value) => setRange('start', value)} /></div>
+          <div className="scroll-animations-row"><label>Range end</label><TextField value={`${range.end.name} ${range.end.offset}`.trim()} disabled={busy} label="Animation range end" onCommit={(value) => setRange('end', value)} /></div>
         </div>
         <div className="scroll-animations-row"><label>Property</label><Select value={property} options={PROPERTIES} onChange={chooseProperty} ariaLabel="Animated property" disabled={busy} /></div>
         <MiniTimeline stops={emittedStops} playhead={playhead} />
         <div className="scroll-animations-keyframes-head"><span>Keyframes</span><button type="button" className="scroll-animations-add" onClick={addStop} disabled={busy}>+ Add stop</button></div>
         <div className="scroll-animations-keyframes">
-          {stops.map((stop, index) => <div className="scroll-animations-stop-row" key={index}>
+          {stops.map((stop, index) => <div className="scroll-animations-stop-row" key={`row-${index}-${stop.progress}`}>
             <div className="scroll-animations-percent"><input type="number" min="0" max="100" value={stop.progress} disabled={busy} aria-label={`Stop ${index + 1} progress`} onChange={(event) => patchStop(index, { progress: Math.min(100, Math.max(0, Number(event.target.value))) })} /><span>%</span></div>
             <TextField value={stop.value} disabled={busy} label={`Stop ${index + 1} value`} onCommit={(value) => patchStop(index, { value: value || defaults[index ? 1 : 0] })} />
             <button type="button" className="scroll-animations-remove" onClick={() => removeStop(index)} disabled={busy || stops.length <= 1} aria-label={`Remove stop ${index + 1}`}>×</button>
           </div>)}
         </div>
-        <p className="scroll-animations-note">Scroll the preview to follow the playhead. The selected element keeps its editor outline while the browser drives the timeline.</p>
+        <p className="scroll-animations-note">Scroll the preview to follow the playhead. Only the first and last stop are written to the animated property — the browser interpolates linearly across <code>animation-range</code>. Middle stops shape the timeline preview only.</p>
       </>}
     </section>
   )
