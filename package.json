@@ -10,7 +10,7 @@
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build": "vite build",
     "start": "npm run build && electron .",
-    "test": "node --test src/agent/__tests__/credential.smoke.test.js src/agent/__tests__/tools.smoke.test.js src/agent/__tests__/systemPrompt.test.js src/agent/__tests__/client.test.js src/agent/diff.test.mjs src/panels/__tests__/AgentPanel.test.js",
+    "test": "node --test src/agent/__tests__/credential.smoke.test.js src/agent/__tests__/tools.smoke.test.js src/agent/__tests__/systemPrompt.test.js src/agent/__tests__/client.test.js src/agent/diff.test.mjs src/panels/__tests__/AgentPanel.test.js electron/__tests__/design-systems.test.js",
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",

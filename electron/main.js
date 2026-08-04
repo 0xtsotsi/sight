@@ -337,6 +337,40 @@ ipcMain.handle('agent:adoptBackgroundTask', async (_e, { projectRoot, taskId, ac
   return { ok: true, ...result };
 });
 
+// Design systems — read/write the .sight/design-systems.json file. The file
+// maps a named preset to a token block that the parser emits under a
+// `:root[data-design-system="name"]` selector so styles apply per-frame.
+const DEFAULT_DESIGN_SYSTEMS = {
+  'default': { tokens: {} },
+  'high-contrast': { tokens: { '--text': '#fff', '--bg': '#000', '--accent': '#ffcb05' } },
+};
+
+ipcMain.handle('designSystems:list', async (_e, { projectRoot } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, systems: { ...DEFAULT_DESIGN_SYSTEMS } };
+  const file = path.join(projectRoot, '.sight', 'design-systems.json');
+  if (!fs.existsSync(file)) return { ok: true, systems: { ...DEFAULT_DESIGN_SYSTEMS } };
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return { ok: true, systems: { ...DEFAULT_DESIGN_SYSTEMS, ...raw } };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
+ipcMain.handle('designSystems:setActive', async (_e, { projectRoot, name, tokens } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!name || typeof name !== 'string') return { ok: false, error: 'name is required' };
+  const file = path.join(projectRoot, '.sight', 'design-systems.json');
+  mkdirSync(path.dirname(file), { recursive: true });
+  let current = {};
+  if (fs.existsSync(file)) {
+    try { current = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { current = {}; }
+  }
+  current[name] = { tokens: tokens || {} };
+  fs.writeFileSync(file, JSON.stringify(current, null, 2));
+  return { ok: true, name, tokens: current[name].tokens };
+});
+
 ipcMain.handle('agent:pruneBackgroundTasks', async (_e, { projectRoot } = {}) => {
   if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, removed: 0 };
   const { pruneStaleEntries } = require('./worktreeShim.js');
