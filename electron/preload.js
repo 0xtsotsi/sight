@@ -821,6 +821,18 @@ contextBridge.exposeInMainWorld('avb', {
   // token — main returns only {status, reason?, recoveryCommand?}.
   // See electron/main.js ipcMain.handle('higgsfield:authProbe', ...).
   higgsfieldAuthProbe: invoke('higgsfield:authProbe'),
+  // Phase 3: capture the live preview iframe at the requested size and
+  // return the PNG as a data URL. See electron/main.js
+  // ipcMain.handle('agent:captureEvidence', ...).
+  agentCaptureEvidence: invoke('agent:captureEvidence'),
+  // Phase 3: worktree orchestrator. The agent NEVER receives raw Git
+  // commands — the panel calls these from the workflow UI and the
+  // orchestrator is the only thing that touches git. See
+  // src/agent/worktree.js for the model.
+  agentOpenBackgroundTask: invoke('agent:openBackgroundTask'),
+  agentFinalizeTask: invoke('agent:finalizeTask'),
+  agentListBackgroundTasks: invoke('agent:listBackgroundTasks'),
+  agentPruneBackgroundTasks: invoke('agent:pruneBackgroundTasks'),
   // AI inline-edit. Renderer never sees the API key value — `aiSetKey`
   // sends it to main once and main stores it in safeStorage. Subsequent
   // calls return only booleans / provider metadata.

@@ -29,6 +29,7 @@ import {
   snapshotSchema,
 } from './schemas.js';
 import { buildMediaTools } from './tools-media.js';
+import { buildOrchestratorTools } from './tools-orchestrator.js';
 
 // ---------------------------------------------------------------------------
 // JSON Schema conversion
@@ -252,6 +253,7 @@ export function buildTools() {
       handler: (args, ctx) => applyPageDiff(ctx, args),
     },
     ...buildMediaTools(),
+    ...buildOrchestratorTools(),
   ];
 }
 
