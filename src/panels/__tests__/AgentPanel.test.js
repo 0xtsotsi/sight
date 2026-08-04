@@ -622,6 +622,104 @@ test('M5-2: tool results > 5KB are collapsed', async () => {
   assert.match(toolEvent.result, /Tool result cleared/);
 });
 
+// ---------------------------------------------------------------------------
+// M6 tests — parallel chats via useChats hook.
+// ---------------------------------------------------------------------------
+
+test('M6-1: useChats exposes independent busy flags per chat', async () => {
+  const { useEffect } = await import('react');
+  const { useChats } = await import('../useChats.js');
+
+  function Probe({ captured }) {
+    const chats = useChats();
+    useEffect(() => {
+      if (captured) captured.current = chats;
+    });
+    return null;
+  }
+
+  const { window } = installDom();
+  mockWindowApis(window);
+  const container = window.document.getElementById('root');
+  const root = createRoot(container);
+  const ref = { current: null };
+  await act(async () => {
+    root.render(React.createElement(Probe, { captured: ref }));
+  });
+  await new Promise((r) => setTimeout(r, 100));
+
+  let captured = ref.current;
+  assert.ok(captured, 'useChats must produce a controller');
+  assert.equal(captured.chats.length, 1, 'starts with one chat');
+  assert.equal(captured.activeIndex, 0);
+
+  await act(async () => { captured.newChat(); });
+  await new Promise((r) => setTimeout(r, 30));
+  captured = ref.current;
+  assert.equal(captured.chats.length, 2, 'newChat grew the list');
+  assert.equal(captured.activeIndex, 1);
+
+  // Set busy on chat 0 — chat 1's busy stays false.
+  await act(async () => { captured.setActive(0); });
+  await new Promise((r) => setTimeout(r, 30));
+  captured = ref.current;
+  await act(async () => { captured.recordBusy(true, { abort: () => {} }); });
+  await new Promise((r) => setTimeout(r, 30));
+  captured = ref.current;
+  const chat0 = captured.chats[0];
+  const chat1 = captured.chats[1];
+  assert.equal(chat0.busy, true);
+  assert.equal(chat1.busy, false);
+});
+
+test('M6-2: ⌘1 jumps to chat index', async () => {
+  const { useEffect } = await import('react');
+  const { useChats } = await import('../useChats.js');
+
+  function Probe({ captured }) {
+    const chats = useChats();
+    useEffect(() => {
+      if (captured) captured.current = chats;
+    });
+    return null;
+  }
+
+  const { window } = installDom();
+  mockWindowApis(window);
+  const container = window.document.getElementById('root');
+  const root = createRoot(container);
+  const ref = { current: null };
+  await act(async () => {
+    root.render(React.createElement(Probe, { captured: ref }));
+  });
+  await new Promise((r) => setTimeout(r, 100));
+  let captured = ref.current;
+
+  // Add two more chats so we have 3 total.
+  await act(async () => { captured.newChat(); });
+  await new Promise((r) => setTimeout(r, 20));
+  captured = ref.current;
+  await act(async () => { captured.newChat(); });
+  await new Promise((r) => setTimeout(r, 20));
+  captured = ref.current;
+  assert.equal(captured.chats.length, 3);
+
+  // Simulate the user pressing ⌘1 (Meta+1).
+  await act(async () => {
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: '1', metaKey: true, bubbles: true }));
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  captured = ref.current;
+  assert.equal(captured.activeIndex, 0, '⌘1 must jump to index 0');
+
+  await act(async () => {
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: '2', metaKey: true, bubbles: true }));
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  captured = ref.current;
+  assert.equal(captured.activeIndex, 1, '⌘2 must jump to index 1');
+});
+
 test('M3-2: transcript-md serializer produces stable output', async () => {
   const { turnsToMarkdown } = await import('../transcript-md.js');
   const turns = [
