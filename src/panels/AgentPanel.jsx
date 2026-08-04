@@ -122,6 +122,11 @@ function MissingKeyBanner() {
         <code>[REDACTED]</code>, <code>ANTHROPIC_API_KEY</code>,
         <code> OPENAI_API_KEY</code>, or <code>GEMINI_API_KEY</code>.
       </p>
+      <p>
+        Or run <code>ggcoder login</code> to write <code>~/.gg/auth.json</code> —
+        the panel reads that file as a fallback. See{' '}
+        <code>electron/agentCredential.js</code> for the lookup table.
+      </p>
     </div>
   );
 }
