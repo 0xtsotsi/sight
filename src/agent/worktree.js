@@ -20,7 +20,7 @@
 // happens on the first call after a crash.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -170,12 +170,25 @@ export function listWorktrees(cwd) {
 export function pruneStaleEntries(projectRoot) {
   const reg = readRegistry(projectRoot);
   const live = listWorktrees(projectRoot);
-  const livePaths = new Set(live.map((w) => w.path));
-  const pruned = reg.tasks.filter((t) => t && t.worktreePath && livePaths.has(t.worktreePath));
+  // macOS resolves /var -> /private/var, /tmp -> /private/tmp. Compare
+  // by exact match and by the resolved real path so a registry row
+  // created before the resolution still matches the live entry on
+  // subsequent starts.
+  const liveRealPaths = new Set(live.map((w) => realpathSafe(w.path)));
+  const pruned = reg.tasks.filter((t) => {
+    if (!t || !t.worktreePath) return false;
+    if (liveRealPaths.has(t.worktreePath)) return true;
+    if (liveRealPaths.has(realpathSafe(t.worktreePath))) return true;
+    return live.some((w) => w.path === t.worktreePath || w.path.endsWith('/' + path.basename(t.worktreePath)));
+  });
   if (pruned.length !== reg.tasks.length) {
     writeRegistry(projectRoot, { ...reg, tasks: pruned });
   }
   return { before: reg.tasks.length, after: pruned.length, removed: reg.tasks.length - pruned.length };
+}
+
+function realpathSafe(p) {
+  try { return realpathSync(p); } catch { return p; }
 }
 
 // ---------------------------------------------------------------------------
