@@ -116,11 +116,11 @@ test('invalid args (missing required path) throw via zod', async () => {
   await assert.rejects(() => tool.handler({}, CTX), /path/i);
 });
 
-test('tools layer exposes exactly 5 tools and no write tool', async () => {
+test('tools layer exposes exactly 9 tools and no write tool', async () => {
   const stub = recordingStub();
   const { buildTools } = await loadToolsWith(stub);
   const names = buildTools().map((t) => t.name);
-  assert.deepEqual(names, ['list_pages', 'read_page', 'read_cms', 'scan_project', 'apply_page_diff']);
+  assert.deepEqual(names, ['list_pages', 'read_page', 'read_cms', 'scan_project', 'apply_page_diff', 'generate_image', 'generate_video', 'generate_thumbnail', 'pull_brandkit']);
   // No tool name contains "write" except apply_page_diff (which doesn't write).
   for (const n of names) {
     if (n === 'apply_page_diff') continue;
