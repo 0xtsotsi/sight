@@ -24,7 +24,8 @@
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
 
 // ---------------------------------------------------------------------------
 // Typed enums
@@ -197,7 +198,7 @@ export const StubProvider = Object.freeze({
 
 const HIGGSFIELD_RECOVERY = 'higgsfield auth login';
 
-export function buildHiggsfieldProvider({ token, binary = 'higgsfield' } = {}) {
+export function buildHiggsfieldProvider({ token, binary = 'higgsfield', pollIntervalMs = 2000, pollTimeoutMs = 5 * 60 * 1000 } = {}) {
   if (typeof token !== 'string' || token.length === 0) {
     throw new Error('buildHiggsfieldProvider: token is required');
   }
@@ -207,17 +208,130 @@ export function buildHiggsfieldProvider({ token, binary = 'higgsfield' } = {}) {
     availability() {
       return token ? { status: PROVIDER_STATUS.READY, reason: 'higgsfield token present' } : { status: PROVIDER_STATUS.UNAVAILABLE, reason: 'no token', recoveryCommand: HIGGSFIELD_RECOVERY };
     },
-    async generate(args = {}) {
-      // Phase 1 stub: real implementation lives in Phase 4 alongside MCP.
-      return mediaUnavailable({
-        kind: args.kind,
-        requestId: args.requestId,
-        reason: 'HiggsfieldProvider is not yet implemented in Phase 1',
-        recoveryCommand: HIGGSFIELD_RECOVERY,
-      });
+    async generate({ kind, prompt, requestId, signal, projectRoot, model, aspectRatio, durationSec, referenceImageIds, topic, faceRefId, name } = {}) {
+      if (signal && signal.aborted) return mediaCancelled({ kind, requestId });
+      const id = requestId ?? 'req-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+      if (!isBinaryAvailable(binary)) {
+        return mediaUnavailable({ kind, requestId: id, reason: 'higgsfield CLI is not installed', recoveryCommand: 'npm i -g @higgsfield/cli' });
+      }
+      try {
+        if (kind === 'brandkit') return await runBrandkit({ id, name, projectRoot, signal });
+        if (kind === 'image') return await runImage({ id, prompt, projectRoot, model, aspectRatio, referenceImageIds, signal });
+        if (kind === 'video') return await runVideo({ id, prompt, projectRoot, model, aspectRatio, durationSec, signal, pollIntervalMs, pollTimeoutMs });
+        if (kind === 'thumbnail') return await runThumbnail({ id, prompt, topic, faceRefId, projectRoot, signal, pollIntervalMs, pollTimeoutMs });
+        return mediaError({ kind, requestId: id, message: 'unsupported kind: ' + String(kind), code: 'unsupported_kind' });
+      } catch (err) {
+        if (signal && signal.aborted) return mediaCancelled({ kind, requestId: id });
+        return mediaError({ kind, requestId: id, message: String(err?.message ?? err), code: 'higgsfield_failed' });
+      }
     },
     _binary: binary,
   });
+}
+
+// ---------------------------------------------------------------------------
+// CLI helpers
+// ---------------------------------------------------------------------------
+
+function isBinaryAvailable(binary) {
+  try {
+    execFileSync(binary, ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    return true;
+  } catch { return false; }
+}
+function writeAssetFile({ projectRoot, requestId, kind, ext, bytes }) {
+  const dir = path.join(projectRoot ?? process.cwd(), '.sight', 'media', requestId);
+  mkdirSync(dir, { recursive: true });
+  const filename = kind === 'video' ? 'video.' + ext : kind === 'thumbnail' ? 'thumbnail.' + ext : kind === 'brandkit' ? 'brandkit.json' : 'image.' + ext;
+  const outPath = path.join(dir, filename);
+  writeFileSync(outPath, bytes);
+  return outPath;
+}
+
+function callHiggsfield(args, signal) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('higgsfield', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (b) => { stdout += b.toString('utf8'); });
+    proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
+    const onAbort = () => { try { proc.kill('SIGTERM'); } catch {} reject(new Error('aborted')); };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    proc.on('error', (err) => { if (signal) signal.removeEventListener('abort', onAbort); reject(err); });
+    proc.on('close', (code) => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      if (code !== 0) return reject(new Error('higgsfield exited with code ' + code + ': ' + stderr.trim()));
+      resolve(stdout);
+    });
+  });
+}
+
+async function runImage({ id, prompt, projectRoot, model, aspectRatio, referenceImageIds, signal }) {
+  const args = ['generate', 'create', model || 'nano_banana_2', '--prompt', prompt, '--json'];
+  if (aspectRatio) args.push('--aspect-ratio', aspectRatio);
+  for (const r of referenceImageIds ?? []) args.push('--image-references', r);
+  const stdout = await callHiggsfield(args, signal);
+  return parseImageResult({ id, stdout, projectRoot, kind: 'image' });
+}
+
+async function runVideo({ id, prompt, projectRoot, model, aspectRatio, durationSec, signal, pollIntervalMs, pollTimeoutMs }) {
+  const args = ['generate', 'create', model || 'seedance_2_0', '--prompt', prompt, '--wait', '--wait-timeout', Math.round(pollTimeoutMs / 60_000) + 'm', '--wait-interval', Math.round(pollIntervalMs / 1000) + 's', '--json'];
+  if (aspectRatio) args.push('--aspect-ratio', aspectRatio);
+  if (durationSec) args.push('--duration', String(durationSec));
+  const stdout = await callHiggsfield(args, signal);
+  return parseImageResult({ id, stdout, projectRoot, kind: 'video' });
+}
+
+async function runThumbnail({ id, prompt, topic, faceRefId, signal, pollIntervalMs, pollTimeoutMs }) {
+  // The CLI does not have a dedicated thumbnail command, so we use the
+  // image path with a YouTube-safe 16:9 aspect ratio. The renderer
+  // surfaces a specific `generate_thumbnail` intent.
+  const args = ['generate', 'create', 'nano_banana_2', '--prompt', (topic ? topic + ' — ' : '') + prompt, '--aspect-ratio', '16:9', '--json', '--wait', '--wait-timeout', Math.round(pollTimeoutMs / 60_000) + 'm', '--wait-interval', Math.round(pollIntervalMs / 1000) + 's'];
+  if (faceRefId) args.push('--image-references', faceRefId);
+  const stdout = await callHiggsfield(args, signal);
+  return parseImageResult({ id, stdout, projectRoot, kind: 'thumbnail' });
+}
+
+async function runBrandkit({ id, name, projectRoot, signal }) {
+  const args = ['marketing-studio', 'brand-kits', 'list', '--json'];
+  const stdout = await callHiggsfield(args, signal);
+  const outPath = writeAssetFile({ projectRoot, requestId: id, kind: 'brandkit', ext: 'json', bytes: Buffer.from(stdout, 'utf8') });
+  return {
+    schemaVersion: 1,
+    status: MEDIA_RESULT_STATUS.OK,
+    kind: 'brandkit',
+    requestId: id,
+    provider: 'higgsfield',
+    assets: [{ path: outPath, kind: 'brandkit', mime: 'application/json', bytes: Buffer.byteLength(stdout, 'utf8') }],
+    license: 'see higgsfield brand-kit terms',
+    attribution: 'higgsfield · marketing-studio · ' + name,
+    data: tryParseJson(stdout),
+    ts: Date.now(),
+  };
+}
+
+function tryParseJson(stdout) {
+  try { return JSON.parse(stdout); } catch { return null; }
+}
+
+function parseImageResult({ id, stdout, projectRoot, kind }) {
+  const parsed = tryParseJson(stdout);
+  const results = Array.isArray(parsed?.results) ? parsed.results : [];
+  const firstUrl = results[0]?.url ?? null;
+  const outPath = writeAssetFile({ projectRoot, requestId: id, kind, ext: 'json', bytes: Buffer.from(JSON.stringify({ id, parsed }, null, 2), 'utf8') });
+  return {
+    schemaVersion: 1,
+    status: MEDIA_RESULT_STATUS.OK,
+    kind,
+    requestId: id,
+    provider: 'higgsfield',
+    assets: [{ path: outPath, kind, mime: 'application/json', bytes: 0, url: firstUrl }],
+    license: 'see higgsfield license terms',
+    attribution: 'higgsfield · generate · ' + (parsed?.model ?? 'unknown'),
+    url: firstUrl,
+    job: parsed?.id ?? null,
+    ts: Date.now(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -292,4 +406,4 @@ export function selectProvider() {
   return StubProvider;
 }
 
-export const _internals = { escapeXml, probeHiggsfieldAuth, AUTH_STATUS, selectProviderAsync };
+export const _internals = { escapeXml, probeHiggsfieldAuth, AUTH_STATUS, selectProviderAsync, isBinaryAvailable, writeAssetFile, tryParseJson };

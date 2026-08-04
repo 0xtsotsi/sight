@@ -18,7 +18,9 @@ import {
   buildHiggsfieldProvider,
   probeHiggsfieldAuth,
   selectProviderAsync,
+  _internals,
 } from '../media.js';
+const { isBinaryAvailable, writeAssetFile, tryParseJson } = _internals;
 
 test('media: StubProvider is always available', () => {
   const a = StubProvider.availability();
@@ -128,4 +130,39 @@ test('media: selectProviderAsync returns a HiggsfieldProvider when the probe rep
   } finally {
     globalThis.window = orig;
   }
+});
+
+test('media: tryParseJson parses valid JSON and returns null on garbage', () => {
+  const ok = tryParseJson('{"a":1}');
+  assert.equal(ok.a, 1);
+  assert.equal(tryParseJson('not json'), null);
+  assert.equal(tryParseJson(''), null);
+});
+
+test('media: isBinaryAvailable returns false for a missing binary', () => {
+  assert.equal(isBinaryAvailable('this-binary-does-not-exist-xyz'), false);
+});
+
+test('media: writeAssetFile writes under .sight/media/<requestId>/ and returns the file path', () => {
+  const projectRoot = mkdtempSync(path.join(tmpdir(), 'sight-asset-'));
+  const p = writeAssetFile({ projectRoot, requestId: 'req-x', kind: 'image', ext: 'png', bytes: Buffer.from('hello', 'utf8') });
+  assert.match(p, /\.sight[\\/]media[\\/]req-x[\\/]image\.png$/);
+  assert.equal(readFileSync(p, 'utf8'), 'hello');
+});
+
+test('media: writeAssetFile picks a stable filename per kind', () => {
+  const projectRoot = mkdtempSync(path.join(tmpdir(), 'sight-asset-'));
+  const v = writeAssetFile({ projectRoot, requestId: 'r1', kind: 'video', ext: 'mp4', bytes: Buffer.from('v', 'utf8') });
+  const t = writeAssetFile({ projectRoot, requestId: 'r1', kind: 'thumbnail', ext: 'png', bytes: Buffer.from('t', 'utf8') });
+  const b = writeAssetFile({ projectRoot, requestId: 'r1', kind: 'brandkit', ext: 'json', bytes: Buffer.from('b', 'utf8') });
+  assert.match(v, /video\.mp4$/);
+  assert.match(t, /thumbnail\.png$/);
+  assert.match(b, /brandkit\.json$/);
+});
+test('media: buildHiggsfieldProvider returns an unavailable result when the CLI is missing', async () => {
+  const p = buildHiggsfieldProvider({ token: 'present', binary: 'this-binary-does-not-exist-xyz' });
+  const out = await p.generate({ kind: 'image', prompt: 'a hero', projectRoot: process.cwd(), requestId: 'req-no-cli' });
+  assert.equal(out.status, 'unavailable');
+  assert.match(out.reason, /not installed/);
+  assert.equal(out.recoveryCommand, 'npm i -g @higgsfield/cli');
 });

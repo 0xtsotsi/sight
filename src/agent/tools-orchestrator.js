@@ -64,6 +64,12 @@ function assertSnapshot(ctx) {
 }
 
 function gateForApproval(toolName, args, ctx) {
+  // When the call comes from the MCP server, the MCP layer has already
+  // gated on its own policy and remembered the approval. We trust the
+  // orchestrator context flag rather than re-approving here.
+  if (ctx && ctx.__mcpTrusted === true) {
+    return { approved: true, decision: { required: false }, hash: hashArgsForApproval(toolName, args) };
+  }
   const decision = needsApproval(toolName, args, ctx);
   if (!decision.required) return { approved: true, decision, hash: hashArgsForApproval(toolName, args) };
   return { approved: false, decision, hash: hashArgsForApproval(toolName, args) };
