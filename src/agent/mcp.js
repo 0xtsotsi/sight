@@ -171,7 +171,8 @@ async function handleCallTool(id, params) {
   // external agents.
   const ctx = { ...(currentSnapshot ?? {}), __mcpTrusted: true };
   try {
-    const result = await tool.handler(args ?? {}, ctx);    return rpcResult(id, {
+    const result = await tool.handler(args ?? {}, ctx);
+    return rpcResult(id, {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       structuredContent: result,
     });

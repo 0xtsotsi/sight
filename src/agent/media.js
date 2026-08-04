@@ -239,6 +239,7 @@ function isBinaryAvailable(binary) {
     return true;
   } catch { return false; }
 }
+
 function writeAssetFile({ projectRoot, requestId, kind, ext, bytes }) {
   const dir = path.join(projectRoot ?? process.cwd(), '.sight', 'media', requestId);
   mkdirSync(dir, { recursive: true });
