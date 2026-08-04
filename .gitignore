@@ -17,3 +17,10 @@ release/
 .gg/
 docs/
 CLAUDE.md
+
+# Test scaffolding — generated at first run by jsdom-backed tests
+# (src/panels/__tests__/AgentPanel.test.js is the first consumer).
+# Never commit; safe to delete.
+src/**/__tests__/_stub_*.mjs
+src/**/__tests__/_*.compiled.mjs
+src/**/__tests__/_*.preview.mjs
