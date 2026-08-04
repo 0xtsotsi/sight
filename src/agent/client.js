@@ -105,7 +105,7 @@ async function adaptToolsForAgent(snapshot) {
       // gg-agent expects a zod schema in `parameters`; tools.js owns the
       // zod schemas in src/agent/schemas.js. We re-import them here so the
       // agent gets the same validation the tools layer already enforces.
-      parameters: await loadZodSchema(t.name),
+      parameters: await resolveZodSchema(t.name),
       execute: async (args, _context) => {
         const result = await t.handler(args, snapshot);
         // gg-agent expects tool results as strings or {content, details}.
@@ -129,6 +129,20 @@ async function adaptToolsForAgent(snapshot) {
 
 // Cached schema lookup keyed by tool name.
 const SCHEMA_LOADERS = {};
+const MEDIA_TOOL_NAMES = new Set([
+  'generate_image',
+  'generate_video',
+  'generate_thumbnail',
+  'pull_brandkit',
+]);
+
+const EVIDENCE_TOOL_NAMES = new Set([
+  'capture_evidence',
+  'open_background_task',
+  'finalize_background_task',
+  'list_background_tasks',
+  'run_live_review',
+]);
 async function loadZodSchema(name) {
   if (SCHEMA_LOADERS[name]) return SCHEMA_LOADERS[name];
   const mod = await import('./schemas.js');
@@ -138,6 +152,48 @@ async function loadZodSchema(name) {
     read_cms: mod.readCmsArgsSchema,
     scan_project: mod.scanProjectArgsSchema,
     apply_page_diff: mod.applyPageDiffArgsSchema,
+  };
+  SCHEMA_LOADERS[name] = map[name];
+  return map[name];
+}
+
+/**
+ * Best-effort: pull the zod schema for a media tool. We do this lazily so
+ * tools-media.js is not loaded until it is actually needed.
+ * @internal
+ */
+async function loadMediaZodSchema(name) {
+  if (SCHEMA_LOADERS[name]) return SCHEMA_LOADERS[name];
+  const mod = await import('./tools-media.js');
+  const map = {
+    generate_image: mod.generateImageArgsSchema,
+    generate_video: mod.generateVideoArgsSchema,
+    generate_thumbnail: mod.generateThumbnailArgsSchema,
+    pull_brandkit: mod.pullBrandkitArgsSchema,
+  };
+  SCHEMA_LOADERS[name] = map[name];
+  return map[name];
+}
+
+async function resolveZodSchema(name) {
+  return (await loadZodSchema(name)) || (await loadMediaZodSchema(name)) || (await loadOrchestratorZodSchema(name));
+}
+
+/**
+ * Best-effort: pull the zod schema for an orchestrator tool. Loaded
+ * lazily so tools-orchestrator.js is not pulled in unless the agent
+ * actually calls one of these tools.
+ * @internal
+ */
+async function loadOrchestratorZodSchema(name) {
+  if (SCHEMA_LOADERS[name]) return SCHEMA_LOADERS[name];
+  const mod = await import('./tools-orchestrator.js');
+  const map = {
+    capture_evidence: mod.captureEvidenceArgsSchema,
+    open_background_task: mod.openBackgroundTaskArgsSchema,
+    finalize_background_task: mod.finalizeBackgroundTaskArgsSchema,
+    list_background_tasks: mod.listBackgroundTasksArgsSchema,
+    run_live_review: mod.runLiveReviewArgsSchema,
   };
   SCHEMA_LOADERS[name] = map[name];
   return map[name];
@@ -205,6 +261,46 @@ function translateEvent(ev) {
             beforeJson: ev.details.beforeJson,
             afterJson: ev.details.afterJson,
           },
+        ];
+      }
+      // Media tools (generate_image, generate_video, generate_thumbnail,
+      // pull_brandkit) all return a MediaResult with a stable {status, ...}
+      // shape. Surface them as a single MEDIA event so the panel can render
+      // the right card (preview, approval, unavailable, or error).
+      if (ev.name && MEDIA_TOOL_NAMES.has(ev.name) && ev.details && typeof ev.details === 'object') {
+        return [
+          out,
+          {
+            type: EVENT.MEDIA,
+            tool: ev.name,
+            status: ev.details.status ?? (ev.isError ? 'error' : 'ok'),
+            result: ev.details,
+            toolCallId: ev.toolCallId,
+          },
+        ];
+      }
+      // Orchestrator tools (capture_evidence, open_background_task,
+      // finalize_background_task, list_background_tasks, run_live_review)
+      // all return typed envelopes. Surface them as a MEDIA-style event
+      // so the panel can render the right card.
+      if (ev.name && EVIDENCE_TOOL_NAMES.has(ev.name) && ev.details && typeof ev.details === 'object') {
+        return [
+          out,
+          {
+            type: EVENT.MEDIA,
+            tool: ev.name,
+            status: ev.details.status ?? (ev.isError ? 'error' : 'ok'),
+            result: ev.details,
+            toolCallId: ev.toolCallId,
+          },
+        ];
+      }
+      // If the tool returned a visual-direction proposal (e.g. from a
+      // custom agent call), surface it as a typed event too.
+      if (ev.details && typeof ev.details === 'object' && ev.details.type === 'visual_direction') {
+        return [
+          out,
+          { type: EVENT.VISUAL_DIRECTION, ...ev.details, toolCallId: ev.toolCallId },
         ];
       }
       return out;
@@ -279,8 +375,10 @@ export async function* runAgentStream({
     yield {
       type: EVENT.ERROR,
       message:
-        'No provider API key configured. Add MINIMAX_API_KEY to ~/.gg/settings.json ' +
-        'or run `ggcoder login` to populate ~/.gg/auth.json.',
+        'No provider API key configured. Add one of MINIMAX_API_KEY, ' +
+        'ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY to ' +
+        '~/.gg/settings.json — or run `ggcoder login` to populate ' +
+        '~/.gg/auth.json. See electron/agentCredential.js for the lookup table.',
     };
     return;
   }
@@ -353,4 +451,7 @@ function defaultModelFor(provider) {
 export const _internals = {
   translateEvent,
   defaultModelFor,
+  MEDIA_TOOL_NAMES,
+  EVIDENCE_TOOL_NAMES,
+  adaptToolsForAgent,
 };
