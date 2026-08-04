@@ -493,6 +493,182 @@ ipcMain.handle('agent:exportFrame', async (_e, { projectRoot, framePath, frameNa
   return { ok: true, path: outPath, bytes: zip.length };
 });
 
+// Snapshots (M11) — per-project version history. Each snapshot is a
+// tarball of the project files under .sight/snapshots/<ts>.tar.gz. The
+// rotation policy keeps 20 most-recent + the last 7 daily snapshots.
+//
+// We use Node's built-in `node:zlib` + a minimal TAR writer (no external
+// deps). The format is the POSIX `ustar` TAR, which is supported by
+// every archive tool on the planet.
+ipcMain.handle('project:snapshot', async (_e, { projectRoot, label } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  const dir = path.join(projectRoot, '.sight', 'snapshots');
+  mkdirSync(dir, { recursive: true });
+  const ts = Date.now();
+  const filename = `${ts}${label ? '-' + String(label).replace(/[^\w.-]+/g, '-') : ''}.tar.gz`;
+  const outPath = path.join(dir, filename);
+  // Build a tarball of src/ + package.json + astro.config.* (limited
+  // scope; node_modules and .sight/ are excluded).
+  const tarbuf = buildProjectTar(projectRoot);
+  const gzbuf = zlib.gzipSync(tarbuf);
+  fs.writeFileSync(outPath, gzbuf);
+  // Rotation: keep last 20 + the 7 daily snapshots.
+  pruneSnapshots(dir);
+  return { ok: true, path: outPath, ts, bytes: gzbuf.length };
+});
+
+ipcMain.handle('project:listSnapshots', async (_e, { projectRoot } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, snapshots: [] };
+  const dir = path.join(projectRoot, '.sight', 'snapshots');
+  if (!fs.existsSync(dir)) return { ok: true, snapshots: [] };
+  const entries = fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.tar.gz'))
+    .map((f) => {
+      const full = path.join(dir, f);
+      const stat = fs.statSync(full);
+      const match = f.match(/^(\d+)/);
+      const ts = match ? parseInt(match[1], 10) : stat.mtimeMs;
+      return { name: f, path: full, ts, bytes: stat.size };
+    })
+    .sort((a, b) => b.ts - a.ts);
+  return { ok: true, snapshots: entries };
+});
+
+ipcMain.handle('project:restoreSnapshot', async (_e, { projectRoot, snapshotPath } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!snapshotPath || !fs.existsSync(snapshotPath)) return { ok: false, error: 'snapshot not found' };
+  // Extract the tarball over the project's src/ + package.json. Backup
+  // the current tree first so a restore is reversible.
+  const backup = await buildProjectTar(projectRoot);
+  const safeSnap = path.resolve(snapshotPath);
+  const safeProject = path.resolve(projectRoot);
+  try {
+    const tar = fs.readFileSync(safeSnap);
+    const gun = zlib.gunzipSync(tar);
+    extractTar(gun, safeProject);
+    return { ok: true, restoredFrom: safeSnap, backupBytes: backup.length };
+  } catch (err) {
+    // Restore the backup if the new one failed to extract.
+    try { extractTar(backup, safeProject); } catch {}
+    return { ok: false, error: 'restore failed: ' + String(err.message || err) };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Mini TAR writer (ustar) — used by project:snapshot.
+// ---------------------------------------------------------------------------
+
+function tarHeader(name, size, mode) {
+  const buf = Buffer.alloc(512);
+  // Name (max 100 chars) — long names use the @longlink extension.
+  if (name.length > 100) {
+    const prefix = '././@LongLink';
+    buf.write(prefix, 0, 'utf8');
+    const nameBuf = Buffer.from(name + '\n', 'utf8');
+    return { header: buf, nameBuf };
+  }
+  buf.write(name, 0, 'utf8');
+  buf.write(mode.toString(8).padStart(7, '0') + '\0', 100);
+  buf.write('0001750\0', 108); // uid
+  buf.write('0001750\0', 116); // gid
+  buf.write(size.toString(8).padStart(11, '0') + '\0', 124);
+  buf.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0', 136);
+  buf.write('        ', 148); // checksum placeholder
+  buf.write('0', 156); // typeflag (regular file)
+  buf.write('ustar\0', 257);
+  buf.write('00', 263);
+  buf.write('sight', 265, 'utf8');
+  // Compute checksum.
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += buf[i];
+  buf.write(sum.toString(8).padStart(6, '0') + '\0', 148);
+  return { header: buf, nameBuf: null };
+}
+
+function buildTar(files) {
+  // files: [{ name, content }]
+  const parts = [];
+  for (const f of files) {
+    const data = Buffer.isBuffer(f.content) ? f.content : Buffer.from(f.content, 'utf8');
+    const { header, nameBuf } = tarHeader(f.name, data.length, 0o644);
+    if (nameBuf) parts.push(nameBuf);
+    parts.push(header);
+    parts.push(data);
+    const pad = (512 - (data.length % 512)) % 512;
+    if (pad > 0) parts.push(Buffer.alloc(pad));
+  }
+  // Two zero blocks = end-of-archive.
+  parts.push(Buffer.alloc(1024));
+  return Buffer.concat(parts);
+}
+
+function buildProjectTar(projectRoot) {
+  const files = [];
+  function walk(dir, prefix) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name.startsWith('.sight')) continue;
+      const rel = prefix ? prefix + '/' + e.name : e.name;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        walk(full, rel);
+      } else if (e.isFile()) {
+        try {
+          const content = fs.readFileSync(full);
+          files.push({ name: rel, content });
+        } catch {}
+      }
+    }
+  }
+  walk(projectRoot, '');
+  return buildTar(files);
+}
+
+function extractTar(buf, projectRoot) {
+  let pos = 0;
+  while (pos < buf.length) {
+    const header = buf.slice(pos, pos + 512);
+    pos += 512;
+    if (header[0] === 0) break; // end-of-archive
+    const name = header.slice(0, 100).toString('utf8').replace(/\0.*$/g, '').trim();
+    const sizeStr = header.slice(124, 136).toString('utf8').replace(/\0/g, '').trim();
+    const size = parseInt(sizeStr, 8);
+    if (!name || isNaN(size)) break;
+    const data = buf.slice(pos, pos + size);
+    pos += Math.ceil(size / 512) * 512;
+    const outPath = path.join(projectRoot, name);
+    // Refuse paths that escape the project root.
+    if (!(outPath + path.sep).startsWith(path.resolve(projectRoot) + path.sep)) continue;
+    mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, data);
+  }
+}
+
+function pruneSnapshots(dir) {
+  // Keep 20 most recent + 7 daily ones (one per day).
+  const entries = fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.tar.gz'))
+    .map((f) => ({ f, full: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  const keep = new Set();
+  for (let i = 0; i < Math.min(20, entries.length); i++) keep.add(entries[i].f);
+  // Keep the latest snapshot per day for the last 7 calendar days.
+  const byDay = new Map();
+  for (const e of entries) {
+    const d = new Date(e.mtime);
+    const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+    if (!byDay.has(key)) byDay.set(key, e.f);
+  }
+  const daily = Array.from(byDay.values()).slice(0, 7);
+  for (const f of daily) keep.add(f);
+  for (const e of entries) {
+    if (!keep.has(e.f)) {
+      try { fs.unlinkSync(e.full); } catch {}
+    }
+  }
+}
+
 ipcMain.handle('agent:pruneBackgroundTasks', async (_e, { projectRoot } = {}) => {
   if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, removed: 0 };
   const { pruneStaleEntries } = require('./worktreeShim.js');
