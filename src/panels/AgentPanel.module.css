@@ -306,6 +306,128 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative;
+}
+
+.composerRow {
+  position: relative;
+}
+
+.modelPicker,
+.thinkingPicker {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.popover {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.popoverItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+.popoverItem:hover,
+.popoverItemActive {
+  background: var(--accent);
+  color: white;
+}
+.popoverCmd {
+  font-weight: 600;
+  min-width: 80px;
+}
+.popoverHint {
+  opacity: 0.7;
+  font-size: 11px;
+}
+
+.reverseSearch {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  z-index: 11;
+}
+.reverseSearchLabel {
+  font-weight: 700;
+  font-size: 11px;
+  opacity: 0.7;
+  font-family: monospace;
+}
+.reverseSearchInput {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0;
+}
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 11px;
+}
+.attachmentName {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachmentRemove {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
 }
 
 .toggles {

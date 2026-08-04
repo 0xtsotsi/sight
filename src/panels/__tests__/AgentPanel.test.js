@@ -331,3 +331,114 @@ test('M1-3: consecutive assistant chunks group into one bubble', async () => {
   assert.match(html, /little /);
   assert.match(html, /robot/);
 });
+
+// ---------------------------------------------------------------------------
+// M2 tests — slash menu, @-mention filter, model picker, prompt history.
+// ---------------------------------------------------------------------------
+
+test('M2-1: slash menu renders 11 commands when / is typed', async () => {
+  const { window } = installDom();
+  mockWindowApis(window);
+  const moduleUrl = await buildAgentPanelModule();
+  const { default: AgentPanel } = await import(moduleUrl);
+  const { Simulate } = await import('react-dom/test-utils');
+
+  const container = window.document.getElementById('root');
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(React.createElement(AgentPanel, { turns: [], disableVirtualizer: true }));
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  const composer = container.querySelector('[data-testid="composer-input"]');
+  assert.ok(composer, 'composer must render');
+
+  // Type "/" — React's Simulate.change triggers the onChange handler.
+  await act(async () => {
+    Simulate.change(composer, { target: { value: '/', selectionStart: 1 } });
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  const menu = container.querySelector('[data-testid="slash-menu"]');
+  assert.ok(menu, 'slash menu must render after / is typed');
+  const items = menu.querySelectorAll('[role="option"]');
+  assert.equal(items.length, 11, `expected 11 slash commands, got ${items.length}`);
+
+  // Filter to "th" — should reduce to commands whose label or hint includes "th".
+  await act(async () => {
+    Simulate.change(composer, { target: { value: '/th', selectionStart: 3 } });
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  const filtered = container.querySelectorAll('[data-testid="slash-menu"] [role="option"]');
+  assert.ok(filtered.length > 0 && filtered.length < 11, `expected filtered list to be smaller, got ${filtered.length}`);
+
+  // Verify registry exposes the same 11 commands.
+  const registry = await import('../../ui/command-registry.js');
+  const cmds = registry.getAgentSlashCommands();
+  assert.equal(cmds.length, 11, `expected 11 slash commands from registry, got ${cmds.length}`);
+  assert.equal(cmds[0].label, 'edit');
+  assert.match(cmds[0].insert, /^\//);
+});
+
+test('M2-2: @-mention popover shows nodes and filters on input', async () => {
+  const { window } = installDom();
+  mockWindowApis(window);
+  const moduleUrl = await buildAgentPanelModule();
+  const { default: AgentPanel } = await import(moduleUrl);
+  const { Simulate } = await import('react-dom/test-utils');
+
+  const container = window.document.getElementById('root');
+  const root = createRoot(container);
+  const pageModel = {
+    nodes: [
+      { id: 'n1', name: 'Hero section', tag: 'section', kind: 'section', children: [] },
+      { id: 'n2', name: 'Card grid', tag: 'div', kind: 'container', children: [] },
+      { id: 'n3', name: 'Footer', tag: 'footer', kind: 'footer', children: [] },
+    ],
+  };
+
+  await act(async () => {
+    root.render(React.createElement(AgentPanel, { turns: [], pageModel, disableVirtualizer: true }));
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  const composer = container.querySelector('[data-testid="composer-input"]');
+  await act(async () => {
+    Simulate.change(composer, { target: { value: '@', selectionStart: 1 } });
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  const menu = container.querySelector('[data-testid="mention-menu"]');
+  assert.ok(menu, 'mention menu must render after @ is typed');
+  const items = menu.querySelectorAll('[role="option"]');
+  assert.equal(items.length, 3, `expected 3 mentions, got ${items.length}`);
+
+  // Filter to "foot" — only Footer should remain.
+  await act(async () => {
+    Simulate.change(composer, { target: { value: '@foot', selectionStart: 5 } });
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  const filtered = container.querySelectorAll('[data-testid="mention-menu"] [role="option"]');
+  assert.equal(filtered.length, 1, `expected 1 mention after filter, got ${filtered.length}`);
+  assert.match(filtered[0].textContent, /Footer/);
+});
+
+test('M2-3: model picker lists only the four locked providers', async () => {
+  const { window } = installDom();
+  mockWindowApis(window);
+  const moduleUrl = await buildAgentPanelModule();
+  const { default: AgentPanel } = await import(moduleUrl);
+
+  const container = window.document.getElementById('root');
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(React.createElement(AgentPanel, { turns: [], disableVirtualizer: true }));
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  const picker = container.querySelector('[data-testid="model-picker"]');
+  assert.ok(picker, 'model picker must render');
+  const options = Array.from(picker.querySelectorAll('option')).map((o) => o.value);
+  assert.deepEqual(options, ['anthropic', 'openai', 'gemini', 'claudeCode'],
+    `locked provider list, got ${options.join(',')}`);
+});

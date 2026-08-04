@@ -407,3 +407,31 @@ export function buildRegistry(ctx) {
   for (const e of ordered) e._ctx = { project, page, model, selection, settings, recents };
   return ordered;
 }
+
+// ---------------------------------------------------------------------------
+// Slash menu (M2)
+//
+// The composer's `/` keystroke surfaces a picker of these commands. Each
+// entry maps to a string that gets inserted at the caret (e.g. "/pick ")
+// and an optional auto-submit. The list is intentionally small and stable —
+// `getAgentSlashCommands` is exported so the test suite can verify the
+// exact count of 11.
+// ---------------------------------------------------------------------------
+
+const SLASH_COMMANDS = [
+  { id: 'edit', label: 'edit', hint: 'edit the current selection', insert: '/edit ' },
+  { id: 'new', label: 'new', hint: 'create a new component', insert: '/new ' },
+  { id: 'fix', label: 'fix', hint: 'fix the bug described below', insert: '/fix ' },
+  { id: 'explain', label: 'explain', hint: 'explain how this works', insert: '/explain ' },
+  { id: 'refactor', label: 'refactor', hint: 'refactor for clarity', insert: '/refactor ' },
+  { id: 'style', label: 'style', hint: 'restyle with the design system', insert: '/style ' },
+  { id: 'test', label: 'test', hint: 'write a test for this', insert: '/test ' },
+  { id: 'docs', label: 'docs', hint: 'write documentation', insert: '/docs ' },
+  { id: 'review', label: 'review', hint: 'review the diff', insert: '/review ' },
+  { id: 'commit', label: 'commit', hint: 'commit pending changes', insert: '/commit ' },
+  { id: 'undo', label: 'undo', hint: 'undo the last change', insert: '/undo' },
+];
+
+export function getAgentSlashCommands() {
+  return SLASH_COMMANDS.map((c) => ({ ...c }));
+}
