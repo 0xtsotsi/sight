@@ -233,7 +233,8 @@ export async function dispatch(req) {
         return rpcResult(id, { content: [{ type: 'text', text: r.block }], structuredContent: r });
       }
       return await handleCallTool(id, params);
-    }    default:
+    }
+    default:
       return rpcError(id, -32601, 'method not found: ' + method);
   }
 }
