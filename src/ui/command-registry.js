@@ -13,7 +13,7 @@
 //   - perform:   () => void — guarded, no-op safe to call any time.
 //   - isAvailable: (ctx) => boolean — palette hides entries that return false.
 
-export const COMMAND_GROUPS = ['Actions', 'Files', 'Nodes', 'AI', 'Deploy'];
+export const COMMAND_GROUPS = ['Actions', 'Files', 'Nodes', 'AI', 'Deploy', 'Drops'];
 
 // Pure helpers — exported so the test suite can exercise them directly.
 
@@ -400,6 +400,20 @@ export function buildRegistry(ctx) {
     ...nodeEntries,
     ...aiEntries,
     ...deployEntries,
+    ...dropEntries,
+  ];
+
+  // Drops (M9) — export the active page as a portable .drop.zip.
+  const dropEntries = [
+    {
+      id: 'drop.share-frame',
+      group: 'Drops',
+      label: 'Share selected frame as Drop',
+      hint: 'Export the active page as a portable .drop.zip',
+      keywords: 'drop export share zip astro',
+      isAvailable: () => !!project && !!page && typeof actions.exportFrame === 'function',
+      perform: () => actions.exportFrame && actions.exportFrame(page),
+    },
   ];
 
   // Pin the current ctx onto each entry so isAvailable can see it without
