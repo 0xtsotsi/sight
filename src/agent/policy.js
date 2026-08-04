@@ -63,6 +63,11 @@ const TOOL_MANIFEST = Object.freeze({
   generate_video: { effect: EFFECT.EXTERNAL, schemaVersion: 1, kind: MEDIA_KIND.VIDEO },
   generate_thumbnail: { effect: EFFECT.EXTERNAL, schemaVersion: 1, kind: MEDIA_KIND.THUMBNAIL },
   pull_brandkit: { effect: EFFECT.EXTERNAL, schemaVersion: 1, kind: MEDIA_KIND.BRANDKIT },
+  capture_evidence: { effect: EFFECT.PROPOSE, schemaVersion: 1 },
+  open_background_task: { effect: EFFECT.WRITE, schemaVersion: 1 },
+  finalize_background_task: { effect: EFFECT.DESTRUCTIVE, schemaVersion: 1 },
+  list_background_tasks: { effect: EFFECT.READ, schemaVersion: 1 },
+  run_live_review: { effect: EFFECT.READ, schemaVersion: 1 },
 });
 
 export function toolManifestEntry(name) {

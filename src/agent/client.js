@@ -134,6 +134,14 @@ const MEDIA_TOOL_NAMES = new Set([
   'generate_thumbnail',
   'pull_brandkit',
 ]);
+
+const EVIDENCE_TOOL_NAMES = new Set([
+  'capture_evidence',
+  'open_background_task',
+  'finalize_background_task',
+  'list_background_tasks',
+  'run_live_review',
+]);
 async function loadZodSchema(name) {
   if (SCHEMA_LOADERS[name]) return SCHEMA_LOADERS[name];
   const mod = await import('./schemas.js');
@@ -239,6 +247,22 @@ function translateEvent(ev) {
       // shape. Surface them as a single MEDIA event so the panel can render
       // the right card (preview, approval, unavailable, or error).
       if (ev.name && MEDIA_TOOL_NAMES.has(ev.name) && ev.details && typeof ev.details === 'object') {
+        return [
+          out,
+          {
+            type: EVENT.MEDIA,
+            tool: ev.name,
+            status: ev.details.status ?? (ev.isError ? 'error' : 'ok'),
+            result: ev.details,
+            toolCallId: ev.toolCallId,
+          },
+        ];
+      }
+      // Orchestrator tools (capture_evidence, open_background_task,
+      // finalize_background_task, list_background_tasks, run_live_review)
+      // all return typed envelopes. Surface them as a MEDIA-style event
+      // so the panel can render the right card.
+      if (ev.name && EVIDENCE_TOOL_NAMES.has(ev.name) && ev.details && typeof ev.details === 'object') {
         return [
           out,
           {

@@ -284,6 +284,91 @@ ipcMain.handle('higgsfield:authProbe', async () => {
   return { status: 'ready', reason: 'token present' };
 });
 
+// ---------------------------------------------------------------------------
+// Phase 3: agent evidence capture. The agent runs a `capture_evidence`
+// tool; this handler captures the live preview iframe at the requested
+// width and returns the PNG as a data URL. The renderer turns this into
+// a `screenshot` event in the panel and a `before/after` pair for the
+// `Live` separate reviewer.
+// ---------------------------------------------------------------------------
+
+const EVIDENCE_DIR_NAME = '.sight/evidence';
+
+// ---------------------------------------------------------------------------
+// Phase 3: worktree orchestrator IPC. The renderer never sees a raw git
+// command; the panel calls these verbs and the orchestrator in
+// src/agent/worktree.js is the only thing that touches git.
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('agent:openBackgroundTask', async (_e, { projectRoot, brief, includeDirtyFiles } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'projectRoot does not exist' };
+  const { openBackgroundTask } = require('./worktreeShim.js');
+  try {
+    const task = openBackgroundTask({ projectRoot, brief: String(brief ?? ''), includeDirtyFiles: Boolean(includeDirtyFiles) });
+    return { ok: true, task };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), code: err?.code };
+  }
+});
+
+ipcMain.handle('agent:finalizeTask', async (_e, { projectRoot, taskId, action } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'projectRoot does not exist' };
+  const { finalizeTask } = require('./worktreeShim.js');
+  try {
+    const out = finalizeTask({ projectRoot, taskId: String(taskId ?? ''), action: String(action ?? '') });
+    return { ok: true, ...out };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? String(err), code: err?.code };
+  }
+});
+
+ipcMain.handle('agent:listBackgroundTasks', async (_e, { projectRoot } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, tasks: [] };
+  const { listTasks } = require('./worktreeShim.js');
+  return { ok: true, tasks: listTasks(projectRoot) };
+});
+
+ipcMain.handle('agent:pruneBackgroundTasks', async (_e, { projectRoot } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, removed: 0 };
+  const { pruneStaleEntries } = require('./worktreeShim.js');
+  const out = pruneStaleEntries(projectRoot);
+  return { ok: true, ...out };
+});
+
+ipcMain.handle('agent:captureEvidence', async (_e, { projectPath, url, width, height, kind } = {}) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
+  if (!url || typeof url !== 'string') return { ok: false, error: 'url is required' };
+  const safeKind = ['before', 'after', 'review'].includes(kind) ? kind : 'review';
+  const w = Math.max(64, Math.min(3840, Math.round(width || 1280)));
+  const h = Math.max(64, Math.min(3840, Math.round(height || 720)));
+  let win = null;
+  try {
+    win = new BrowserWindow({
+      width: w,
+      height: h,
+      show: false,
+      webPreferences: { offscreen: false, sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    await win.loadURL(url);
+    // Give the layout a frame to settle (fonts, images) before grabbing it.
+    await new Promise((r) => setTimeout(r, 200));
+    const image = await win.webContents.capturePage();
+    const png = image.toPNG();
+    const dir = path.join(projectPath || os.homedir(), EVIDENCE_DIR_NAME, safeKind);
+    mkdirSync(dir, { recursive: true });
+    const filename = 'shot-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.png';
+    const outPath = path.join(dir, filename);
+    writeFileSync(outPath, png);
+    return { ok: true, kind: safeKind, path: outPath, width: w, height: h, bytes: png.length, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  } finally {
+    if (win) {
+      try { win.destroy(); } catch { /* already gone */ }
+    }
+  }
+});
+
 app.on('web-contents-created', (_event, contents) => {
   // Sub-frame's preload sends a normalized axe report here. Sender id is the
   // sub-frame's webContents; parent (the renderer) and main share electron
