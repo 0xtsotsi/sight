@@ -3,25 +3,27 @@
 // Right-rail panel — chat-style interface to the gg-coder agent.
 //
 // Wires the panel-facing event stream from src/agent/client.js into a
-// minimal chat UI. The hard design rule (enforced by tools.js + diff.js,
-// NOT by this file) is that the agent can never write the user's
-// project directly — every edit surfaces as a Diff card with Apply/Reject.
+// virtualized chat UI. The hard design rule (enforced by tools.js + diff.js,
+// NOT by this file) is that the agent can never write the user's project
+// directly — every edit surfaces as a Diff card with Apply/Reject.
 //
-// Apply dispatches through the window.avb.writePage IPC; Reject discards.
-// Selection + undo/redo integration lands in task 5; this task is the UI
-// shell + streaming plumbing.
+// Apply dispatches through the App.jsx mutateModel path; Reject discards.
+// The message list is virtualized via @tanstack/react-virtual — only the
+// mounted rows see React's render cost, so a 1000-turn transcript scrolls
+// smoothly. Consecutive assistant text chunks are grouped into a single
+// turn bubble so the streaming experience reads as one continuous answer.
 //
 // Event-type enum is duplicated locally with a pointer to the canonical
-// src/agent/types.js. Dedupe at integration time (task 5 / task 8).
+// src/agent/types.js. Dedupe at integration time.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { runAgentStream } from '../agent/client.js';
 import { buildSystemPrompt } from '../agent/systemPrompt.js';
 import styles from './AgentPanel.module.css';
 
 // Mirror of src/agent/types.js EVENT enum. Kept inline so this file can
-// render before the types module loads (and to keep the test snapshot
-// stable). Update both in lockstep.
+// render before the types module loads. Update both in lockstep.
 const EVENT = Object.freeze({
   TEXT: 'text',
   THINKING: 'thinking',
@@ -39,22 +41,54 @@ const EVENT = Object.freeze({
   WORKFLOW: 'workflow',
 });
 
+// Stick-to-bottom threshold (px). If the user is within this many pixels of
+// the bottom when new content arrives, auto-scroll; otherwise leave them
+// alone so reading earlier turns isn't disrupted.
+const STICK_TO_BOTTOM_PX = 32;
+const ROW_OVERSCAN = 6;
+
+// ---------------------------------------------------------------------------
+// Turn model
+// ---------------------------------------------------------------------------
+//
+// A Turn is either a user message or an assistant message. Assistant turns
+// carry the rich event list (text deltas, tool traces, diff cards, etc.) so
+// the virtualizer can render a complete bubble per turn without re-deriving
+// streams from a global event log on every keystroke.
+//
+// id: stable string used as the React key and DOM data-testid suffix.
+// role: 'user' | 'assistant'
+// content: aggregated text (assistant: concatenation of TEXT deltas).
+// ts: epoch ms; used for the hover-reveal timestamp in M4.
+// events: only set for the in-flight assistant turn.
+// status: 'pending' (streaming) | 'done' (committed).
+
+let turnCounter = 0;
+function newTurnId(role) {
+  turnCounter += 1;
+  return `${role}-${Date.now().toString(36)}-${turnCounter}`;
+}
+
+function emptyTurn(role, content, ts = Date.now()) {
+  return { id: newTurnId(role), role, content, ts, events: [], status: 'done' };
+}
+
 // ---------------------------------------------------------------------------
 // Hook: read agent credential once per panel mount.
 // ---------------------------------------------------------------------------
 
 function useCredential() {
-  const [state, setState] = useState({ status: 'loading', credential: null });
+  const [state, setState] = useState({ status: 'loading', credential: [REDACTED] });
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const r = await window.avb.getAgentCredential();
         if (!alive) return;
-        if (r?.ok) setState({ status: 'ready', credential: r.credential });
-        else setState({ status: 'missing', credential: null });
+        if (r?.ok) setState({ status: 'ready', credential: [REDACTED] });
+        else setState({ status: 'missing', credential: [REDACTED] });
       } catch {
-        if (alive) setState({ status: 'missing', credential: null });
+        if (alive) setState({ status: 'missing', credential: [REDACTED] });
       }
     })();
     return () => { alive = false; };
@@ -135,6 +169,71 @@ function MissingKeyBanner() {
 }
 
 // ---------------------------------------------------------------------------
+// Render one assistant turn. Includes the aggregated text + the rich event
+// list (tool traces, diff cards, mediacards, etc.). When the turn is still
+// in-flight, the rich events stream in; when committed, they stay frozen.
+// ---------------------------------------------------------------------------
+
+function TurnBubble({ turn, onApply, onReject, disabled, onVisualDirectionChoose, onVisualDirectionSkip, onMediaApprove, onMediaReject, onAbort, busy }) {
+  const isUser = turn.role === 'user';
+  const eventList = Array.isArray(turn.events) ? turn.events : [];
+  return (
+    <div data-testid="turn" data-role={turn.role} className={`${styles.message} ${styles[`message_${turn.role}`]}`}>
+      <div className={styles.messageRole}>{turn.role}</div>
+      <div className={styles.messageContent}>{turn.content}</div>
+      {!isUser && eventList.length > 0 && (
+        <div className={styles.live}>
+          {eventList.map((e, i) => {
+            if (!e || typeof e !== 'object') return null;
+            switch (e.type) {
+              case EVENT.TEXT:
+                return <span key={i} className={styles.liveText}>{e.delta}</span>;
+              case EVENT.THINKING:
+                return <div key={i} className={styles.liveThinking}>{e.delta}</div>;
+              case EVENT.TOOL:
+                return (
+                  <ToolTrace
+                    key={i}
+                    name={e.name}
+                    status={e.status}
+                    args={e.args}
+                    result={e.result}
+                    error={e.error}
+                    durationMs={e.durationMs}
+                  />
+                );
+              case EVENT.DIFF:
+                return (
+                  <DiffCard
+                    key={i}
+                    diff={e}
+                    onApply={onApply}
+                    onReject={onReject}
+                    disabled={disabled}
+                  />
+                );
+              case EVENT.RETRY:
+                return <div key={i} className={styles.liveMeta}>retry: {e.reason} ({e.attempt}/{e.maxAttempts})</div>;
+              case EVENT.TRUNCATED:
+                return <div key={i} className={styles.liveMeta}>truncated: {e.reason}</div>;
+              case EVENT.ERROR:
+                return <div key={i} className={styles.liveError}>{e.message}</div>;
+              case EVENT.MAX_TURNS:
+                return <div key={i} className={styles.liveMeta}>max turns reached ({e.maxTurns})</div>;
+              default:
+                return null;
+            }
+          })}
+          {busy && turn.status === 'pending' && (
+            <button className={styles.abort} onClick={onAbort}>Stop</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -146,31 +245,102 @@ export default function AgentPanel({
   onApplyDiff,
   onRejectDiff,
   showToast,
+  initialTurns,
+  turns: turnsProp,
+  // Test-only hook: lets the test environment inject a fixed viewport
+  // height so the virtualizer renders its visible window in jsdom. Never
+  // set in production.
+  viewportHeight,
+  // Test-only hook: bypass the virtualizer and render rows directly. Useful
+  // when the test environment cannot perform layout (e.g. jsdom). Never
+  // set in production.
+  disableVirtualizer,
 }) {
   const credential = useCredential();
-  const [messages, setMessages] = useState([]); // [{role, content, id}]
-  const [events, setEvents] = useState([]); // accumulated panel events for the in-flight turn
+  const [turns, setTurns] = useState(() => {
+    if (Array.isArray(turnsProp)) return turnsProp;
+    if (Array.isArray(initialTurns)) return initialTurns;
+    return [];
+  }); // ordered Turn[]
   const [input, setInput] = useState('');
   const [includePage, setIncludePage] = useState(true);
   const [includeSelection, setIncludeSelection] = useState(true);
   const [busy, setBusy] = useState(false);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
-  const eventsRef = useRef([]);
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  // True when the user has manually scrolled away from the bottom. Suppresses
+  // auto-scroll-on-new-turn so reading earlier turns isn't disrupted.
+  const stickToBottomRef = useRef(true);
 
-  // Auto-scroll on new events / messages
-  useEffect(() => {
+  // Virtualizer — measured rows; only the visible window is mounted.
+  const virtualizer = useVirtualizer({
+    count: turns.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 96,
+    overscan: ROW_OVERSCAN,
+    measureElement: (el) => el?.getBoundingClientRect().height ?? 96,
+  });
+
+  // Track whether the user is at the bottom of the scroller. When a new turn
+  // arrives, we only scroll-to-bottom if the user was already there.
+  const recomputeStickToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [events, messages]);
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distance <= STICK_TO_BOTTOM_PX;
+  }, []);
 
-  const updateEvents = useCallback((updater) => {
-    setEvents((prev) => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      eventsRef.current = next;
+  const handleScroll = useCallback(() => {
+    recomputeStickToBottom();
+  }, [recomputeStickToBottom]);
+
+  // Each time the list of turns changes, decide whether to scroll to the new
+  // last row. Virtualizer measure is async, so we run after layout.
+  const lastTurnCountRef = useRef(turns.length);
+  useLayoutEffect(() => {
+    if (scrollRef.current && turns.length > lastTurnCountRef.current && stickToBottomRef.current) {
+      virtualizer.scrollToIndex(turns.length - 1, { align: 'end' });
+    }
+    lastTurnCountRef.current = turns.length;
+  }, [turns, virtualizer]);
+
+  // DEV-mode test hook: lets the visual-verification script seed N turns
+  // without actually calling the agent. Guarded on import.meta.env.DEV so
+  // it never lands in production builds.
+  if (import.meta.env && import.meta.env.DEV && typeof window !== 'undefined') {
+    window.__seedTurns = (n) => {
+      const seeded = [];
+      for (let i = 0; i < n; i++) {
+        const role = i % 2 === 0 ? 'user' : 'assistant';
+        const content = role === 'user'
+          ? `Seeded user prompt #${i + 1}`
+          : `Seeded assistant response #${i + 1} — ${'padding '.repeat(40).trim()}`;
+        seeded.push({ ...emptyTurn(role, content), ts: Date.now() + i });
+      }
+      setTurns(seeded);
+    };
+  }
+
+  const updateTurn = useCallback((id, updater) => {
+    setTurns((prev) => {
+      const next = prev.map((t) => (t.id === id ? updater(t) : t));
       return next;
     });
+  }, []);
+
+  const appendEventToTurn = useCallback((id, event) => {
+    setTurns((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const events = [...(t.events || []), event];
+      // Aggregate text deltas into the turn's content for chat-history
+      // readability even when the bubble is rendered separately.
+      const content = event.type === EVENT.TEXT
+        ? t.content + event.delta
+        : t.content;
+      return { ...t, events, content };
+    }));
   }, []);
 
   const handleSubmit = useCallback(async (e) => {
@@ -188,62 +358,53 @@ export default function AgentPanel({
       activePagePath: includePage ? activePagePath : null,
       pageModel: includePage ? pageModel : null,
     };
-    const userMsg = { role: 'user', content: text, id: `u-${Date.now()}` };
-    setMessages((m) => [...m, userMsg]);
+    const userTurn = emptyTurn('user', text);
+    setTurns((prev) => [...prev, userTurn]);
     setInput('');
     setBusy(true);
-    updateEvents(() => []);
+    // Pin to the bottom so the user's new message (and the streaming answer)
+    // appear in view.
+    stickToBottomRef.current = true;
 
     const controller = new AbortController();
     abortRef.current = controller;
-    const collected = [];
+    // Create the pending assistant turn up-front so the virtualizer can
+    // size a row for it. Group consecutive assistant chunks into a single
+    // bubble; the panel mutates this turn in place as events arrive.
+    const assistantTurn = { ...emptyTurn('assistant', ''), status: 'pending', events: [] };
+    setTurns((prev) => [...prev, assistantTurn]);
+
     try {
       const stream = runAgentStream({
-        messages: [...messages, userMsg],
+        messages: [...turnsRef.current.filter((t) => t.role !== 'pending'), userTurn].map((t) => ({ role: t.role, content: t.content })),
         snapshot,
         systemPrompt: buildSystemPrompt(snapshot),
-        credential: credential.credential,
+        credential: [REDACTED],
         signal: controller.signal,
       });
       for await (const ev of stream) {
-        collected.push(ev);
-        // Live-update: append the latest event so the user sees streaming
-        // text / tool trace / diff cards in real time.
-        updateEvents((prev) => [...prev, ev]);
-        // When the diff event arrives, the user can interact even though
-        // busy is still true — the turn may continue with follow-up edits.
+        appendEventToTurn(assistantTurn.id, ev);
       }
     } catch (err) {
-      updateEvents((prev) => [
-        ...prev,
-        { type: EVENT.ERROR, message: err?.message ?? String(err) },
-      ]);
+      appendEventToTurn(assistantTurn.id, { type: EVENT.ERROR, message: err?.message ?? String(err) });
     } finally {
       setBusy(false);
       abortRef.current = null;
-      // Once the stream finishes, fold collected events into the message
-      // list as a single assistant turn so the chat history reads cleanly.
-      const assistantContent = collected
-        .filter((e) => e?.type === EVENT.TEXT)
-        .map((e) => e.delta)
-        .join('');
-      if (assistantContent) {
-        setMessages((m) => [...m, { role: 'assistant', content: assistantContent, id: `a-${Date.now()}` }]);
-      }
+      // Mark the assistant turn as committed so the bubble freezes.
+      setTurns((prev) => prev.map((t) => (t.id === assistantTurn.id ? { ...t, status: 'done' } : t)));
     }
   }, [
     busy,
     input,
-    credential,
+    credential.status,
     project,
     selectedNodeId,
     activePagePath,
     includePage,
     includeSelection,
     pageModel,
-    messages,
-    updateEvents,
     showToast,
+    appendEventToTurn,
   ]);
 
   const handleAbort = useCallback(() => {
@@ -252,52 +413,65 @@ export default function AgentPanel({
 
   const handleApply = useCallback(async (diff) => {
     try {
-      // Task 5: dispatch through the App.jsx reducer path so the edit
-      // gets undo/redo + dirty tracking + the same save/markSelfWrite
-      // flow human edits use. We do NOT call window.avb.writePage here.
       onApplyDiff?.(diff);
-      updateEvents((prev) => prev.filter((e) => !(e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)));
+      setTurns((prev) => prev.map((t) => {
+        if (!t.events) return t;
+        return { ...t, events: t.events.filter((e) => !(e && e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)) };
+      }));
     } catch (err) {
       showToast?.(String(err?.message ?? err), 'error');
     }
-  }, [onApplyDiff, showToast, updateEvents]);
+  }, [onApplyDiff, showToast]);
 
   const handleReject = useCallback((diff) => {
     onRejectDiff?.(diff);
-    updateEvents((prev) => prev.filter((e) => !(e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)));
-  }, [onRejectDiff, updateEvents]);
+    setTurns((prev) => prev.map((t) => {
+      if (!t.events) return t;
+      return { ...t, events: t.events.filter((e) => !(e && e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)) };
+    }));
+  }, [onRejectDiff]);
 
   const handleVisualDirectionChoose = useCallback((directionId, variant) => {
     showToast?.(`Visual direction pinned: ${directionId}${variant ? ' (asking for variants)' : ''}`);
-    updateEvents((prev) => prev.map((e) => (
-      e && e.type === EVENT.VISUAL_DIRECTION && e.status === 'proposed'
-        ? { ...e, status: variant ? 'variants' : 'chosen', directionId }
-        : e
-    )));
-  }, [showToast, updateEvents]);
+    setTurns((prev) => prev.map((t) => {
+      if (!t.events) return t;
+      return { ...t, events: t.events.map((e) => (
+        e && e.type === EVENT.VISUAL_DIRECTION && e.status === 'proposed'
+          ? { ...e, status: variant ? 'variants' : 'chosen', directionId }
+          : e
+      )) };
+    }));
+  }, [showToast]);
 
   const handleVisualDirectionSkip = useCallback(() => {
     showToast?.('Visual direction skipped');
-    updateEvents((prev) => prev.map((e) => (
-      e && e.type === EVENT.VISUAL_DIRECTION && e.status === 'proposed'
-        ? { ...e, status: 'skipped' }
-        : e
-    )));
-  }, [showToast, updateEvents]);
+    setTurns((prev) => prev.map((t) => {
+      if (!t.events) return t;
+      return { ...t, events: t.events.map((e) => (
+        e && e.type === EVENT.VISUAL_DIRECTION && e.status === 'proposed'
+          ? { ...e, status: 'skipped' }
+          : e
+      )) };
+    }));
+  }, [showToast]);
 
   const handleMediaApprove = useCallback((event) => {
     showToast?.(`Media approved: ${event.tool} (one-shot)`);
-    updateEvents((prev) => prev.map((e) => (
-      e === event ? { ...e, status: 'ok', result: { ...e.result, status: 'ok', _approved: true } } : e
-    )));
-  }, [showToast, updateEvents]);
+    setTurns((prev) => prev.map((t) => {
+      if (!t.events) return t;
+      return { ...t, events: t.events.map((e) => (
+        e === event ? { ...e, status: 'ok', result: { ...e.result, _approved: true } } : e
+      )) };
+    }));
+  }, [showToast]);
 
   const handleMediaReject = useCallback((event) => {
     showToast?.(`Media rejected: ${event.tool}`);
-    updateEvents((prev) => prev.map((e) => (
-      e === event ? { ...e, status: 'cancelled' } : e
-    )));
-  }, [showToast, updateEvents]);
+    setTurns((prev) => prev.map((t) => {
+      if (!t.events) return t;
+      return { ...t, events: t.events.map((e) => (e === event ? { ...e, status: 'cancelled' } : e)) };
+    }));
+  }, [showToast]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -313,6 +487,9 @@ export default function AgentPanel({
     }
   };
 
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalHeight = virtualizer.getTotalSize();
+
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
@@ -325,84 +502,64 @@ export default function AgentPanel({
       )}
       {credential.status === 'missing' && <MissingKeyBanner />}
 
-      <div ref={scrollRef} className={styles.scroll}>
-        {messages.map((m) => (
-          <div key={m.id} className={`${styles.message} ${styles[`message_${m.role}`]}`}>
-            <div className={styles.messageRole}>{m.role}</div>
-            <div className={styles.messageContent}>{m.content}</div>
-          </div>
-        ))}
-
-        {/* In-flight turn: live events stream below the user message */}
-        {busy && events.length > 0 && (
-          <div className={styles.live}>
-            {events.map((e, i) => {
-              if (!e || typeof e !== 'object') return null;
-              switch (e.type) {
-                case EVENT.TEXT:
-                  return <div key={i} className={styles.liveText}>{e.delta}</div>;
-                case EVENT.THINKING:
-                  return <div key={i} className={styles.liveThinking}>{e.delta}</div>;
-                case EVENT.TOOL:
-                  return (
-                    <ToolTrace
-                      key={i}
-                      name={e.name}
-                      status={e.status}
-                      args={e.args}
-                      result={e.result}
-                      error={e.error}
-                      durationMs={e.durationMs}
-                    />
-                  );
-                case EVENT.DIFF:
-                  return (
-                    <DiffCard
-                      key={i}
-                      diff={e}
-                      onApply={handleApply}
-                      onReject={handleReject}
-                      disabled={credential.status !== 'ready'}
-                    />
-                  );
-                case EVENT.RETRY:
-                  return <div key={i} className={styles.liveMeta}>retry: {e.reason} ({e.attempt}/{e.maxAttempts})</div>;
-                case EVENT.TRUNCATED:
-                  return <div key={i} className={styles.liveMeta}>truncated: {e.reason}</div>;
-                case EVENT.ERROR:
-                  return <div key={i} className={styles.liveError}>{e.message}</div>;
-                case EVENT.MAX_TURNS:
-                  return <div key={i} className={styles.liveMeta}>max turns reached ({e.maxTurns})</div>;
-                case EVENT.VISUAL_DIRECTION:
-                  return (
-                    <VisualDirectionCard
-                      key={i}
-                      event={e}
-                      onChoose={handleVisualDirectionChoose}
-                      onSkip={handleVisualDirectionSkip}
-                      disabled={credential.status !== 'ready'}
-                    />
-                  );
-                case EVENT.MEDIA:
-                  return (
-                    <MediaCard
-                      key={i}
-                      event={e}
-                      onApprove={handleMediaApprove}
-                      onReject={handleMediaReject}
-                    />
-                  );
-                case EVENT.WORKFLOW:
-                  return <WorkflowStep key={i} event={e} />;
-                default:
-                  return null;
-              }
-            })}
-            {busy && (
-              <button className={styles.abort} onClick={handleAbort}>Stop</button>
-            )}
-          </div>
-        )}
+      <div
+        ref={scrollRef}
+        className={styles.scroll}
+        data-testid="agent-scroll"
+        onScroll={handleScroll}
+        style={{ position: 'relative' }}
+      >
+        <div style={{ height: disableVirtualizer ? 'auto' : totalHeight, position: disableVirtualizer ? 'static' : 'relative' }}>
+          {(disableVirtualizer ? turns : virtualItems.map((vi) => turns[vi.index]).filter(Boolean)).map((turn) => {
+            if (!turn) return null;
+            if (disableVirtualizer) {
+              return (
+                <div key={turn.id} data-index={turn.id}>
+                  <TurnBubble
+                    turn={turn}
+                    onApply={handleApply}
+                    onReject={handleReject}
+                    disabled={credential.status !== 'ready'}
+                    onVisualDirectionChoose={handleVisualDirectionChoose}
+                    onVisualDirectionSkip={handleVisualDirectionSkip}
+                    onMediaApprove={handleMediaApprove}
+                    onMediaReject={handleMediaReject}
+                    onAbort={handleAbort}
+                    busy={busy}
+                  />
+                </div>
+              );
+            }
+            const vi = virtualItems.find((v) => v.index === turns.indexOf(turn));
+            return (
+              <div
+                key={turn.id}
+                data-index={vi ? vi.index : 0}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  transform: `translateY(${vi ? vi.start : 0}px)`,
+                }}
+              >
+                <TurnBubble
+                  turn={turn}
+                  onApply={handleApply}
+                  onReject={handleReject}
+                  disabled={credential.status !== 'ready'}
+                  onVisualDirectionChoose={handleVisualDirectionChoose}
+                  onVisualDirectionSkip={handleVisualDirectionSkip}
+                  onMediaApprove={handleMediaApprove}
+                  onMediaReject={handleMediaReject}
+                  onAbort={handleAbort}
+                  busy={busy}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <form className={styles.composer} onSubmit={handleSubmit}>
