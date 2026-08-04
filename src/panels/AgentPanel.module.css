@@ -28,6 +28,26 @@
   justify-content: space-between;
   padding: 12px 14px 8px;
   border-bottom: 1px solid var(--border);
+  gap: 4px;
+}
+
+.headerActions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.regionSelect,
+.copyBtn {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .subtitle {
