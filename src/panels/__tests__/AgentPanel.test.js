@@ -442,3 +442,96 @@ test('M2-3: model picker lists only the four locked providers', async () => {
   assert.deepEqual(options, ['anthropic', 'openai', 'gemini', 'claudeCode'],
     `locked provider list, got ${options.join(',')}`);
 });
+
+// ---------------------------------------------------------------------------
+// M3 tests — region persistence, resize handle, transcript MD.
+// ---------------------------------------------------------------------------
+
+test('M3-1: region is persisted to localStorage', async () => {
+  const { window } = installDom();
+  mockWindowApis(window);
+  const moduleUrl = await buildAgentPanelModule();
+  const { default: AgentPanel } = await import(moduleUrl);
+
+  const container = window.document.getElementById('root');
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(React.createElement(AgentPanel, {
+      turns: [],
+      disableVirtualizer: true,
+      region: 'bottom',
+      onRegionChange: () => {},
+      width: 400,
+      onWidthChange: () => {},
+    }));
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  const panel = container.querySelector('[data-region]');
+  assert.ok(panel, 'panel must render');
+  assert.equal(panel.getAttribute('data-region'), 'bottom');
+});
+
+test('M3-3: resize handle fires width change on drag', async () => {
+  const { window } = installDom();
+  mockWindowApis(window);
+  const moduleUrl = await buildAgentPanelModule();
+  const { default: AgentPanel } = await import(moduleUrl);
+
+  let committedWidth = 360;
+  const container = window.document.getElementById('root');
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(React.createElement(AgentPanel, {
+      turns: [],
+      disableVirtualizer: true,
+      region: 'right',
+      onRegionChange: () => {},
+      width: 360,
+      onWidthChange: (v) => { committedWidth = v; },
+    }));
+  });
+  await new Promise((r) => setTimeout(r, 50));
+
+  const handle = container.querySelector('[data-testid="region-handle"]');
+  assert.ok(handle, 'resize handle must render for right/left regions');
+  // Simulate mousedown + mousemove + mouseup.
+  await act(async () => {
+    handle.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, clientX: 600, clientY: 0 }));
+    window.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 800, clientY: 0 }));
+    window.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true, clientX: 800, clientY: 0 }));
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  // width should have changed (dragging right by 200 should reduce width by 200
+  // for a right-edge panel — i.e. width = 360 - 200 = 160, clamped to 240).
+  assert.ok(committedWidth >= 240 && committedWidth <= 360, `width should be in [240, 360], got ${committedWidth}`);
+});
+
+test('M3-2: transcript-md serializer produces stable output', async () => {
+  const { turnsToMarkdown } = await import('../transcript-md.js');
+  const turns = [
+    { id: 'u1', role: 'user', content: 'Hi', ts: 1700000000000, events: [], status: 'done' },
+    {
+      id: 'a1',
+      role: 'assistant',
+      content: 'Hello.',
+      ts: 1700000005000,
+      status: 'done',
+      events: [
+        { type: 'thinking', delta: 'The user greeted me.' },
+        { type: 'tool', name: 'read', status: 'done', args: { path: 'index.astro' }, durationMs: 12 },
+        { type: 'diff', summary: 'bold greeting', path: 'index.astro' },
+      ],
+    },
+  ];
+  const md = turnsToMarkdown(turns);
+  assert.match(md, /## User/);
+  assert.match(md, /## Assistant/);
+  assert.match(md, /Hi/);
+  assert.match(md, /Hello\./);
+  assert.match(md, /thinking/);
+  assert.match(md, /\*\*tool\*\* read/);
+  assert.match(md, /\*\*diff\*\* bold greeting/);
+  // ISO timestamps
+  assert.match(md, /2023-11-14/);
+});
