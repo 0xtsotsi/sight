@@ -623,6 +623,59 @@ test('M5-2: tool results > 5KB are collapsed', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// M7 tests — parallel agents: DiffCard conflict badge + streamId.
+// ---------------------------------------------------------------------------
+
+test('M7-1: conflicting diffs on the same path show a conflict badge', async () => {
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const moduleUrl = await buildAgentPanelModule();
+  const { default: AgentPanel } = await import(moduleUrl);
+
+  const turns = [
+    {
+      id: 'user-1',
+      role: 'user',
+      content: 'Edit index.astro',
+      ts: Date.now(),
+      events: [],
+      status: 'done',
+    },
+    {
+      id: 'assistant-1',
+      role: 'assistant',
+      content: 'Two streams proposed a change.',
+      ts: Date.now(),
+      events: [
+        {
+          type: 'diff',
+          streamId: 'agent-A',
+          path: 'index.astro',
+          summary: 'hero — heading rewrite',
+          unifiedDiff: '--- a\n+++ b\n-old\n+new',
+          conflicting: true,
+        },
+        {
+          type: 'diff',
+          streamId: 'agent-B',
+          path: 'index.astro',
+          summary: 'hero — typography bump',
+          unifiedDiff: '--- a\n+++ b\n-old\n+new',
+          conflicting: true,
+        },
+      ],
+      status: 'pending',
+    },
+  ];
+  const html = renderToStaticMarkup(React.createElement(AgentPanel, { turns, disableVirtualizer: true }));
+  assert.match(html, /Conflicting/);
+  assert.match(html, /agent-A/);
+  assert.match(html, /agent-B/);
+  // The Apply button must be disabled when conflicting.
+  assert.match(html, /disabled=""/);
+});
+
+// ---------------------------------------------------------------------------
 // M6 tests — parallel chats via useChats hook.
 // ---------------------------------------------------------------------------
 

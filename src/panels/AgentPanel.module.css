@@ -332,6 +332,35 @@
   gap: 8px;
 }
 
+.diffCardConflict {
+  border-color: var(--error, #e3553d);
+  background: color-mix(in srgb, var(--error, #e3553d) 8%, transparent);
+}
+
+.diffStream {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-right: 6px;
+  display: inline-block;
+}
+
+.diffConflictBadge {
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+  background: var(--error, #e3553d);
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-right: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: inline-block;
+}
+
 .diffHeader {
   display: flex;
   flex-direction: column;
