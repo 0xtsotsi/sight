@@ -27,7 +27,8 @@
 //   {type: 'workflow',   step: 'understand'|'shape'|'build'|'inspect'|'polish'|'finish'|'live',
 //                        status: 'active'|'done'|'skipped'|'error'|'awaiting',
 //                        workflowId: string, payload?: unknown}
-//// Translating from gg-agent's events to these is the client's job; see
+//
+// Translating from gg-agent's events to these is the client's job; see
 // translateEvent() in client.js.
 
 export const EVENT = Object.freeze({

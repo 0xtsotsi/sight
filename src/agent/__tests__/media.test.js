@@ -82,10 +82,8 @@ test('media: buildHiggsfieldProvider refuses to construct without a token', () =
   assert.throws(() => buildHiggsfieldProvider({}), /token is required/i);
 });
 
-test('media: buildHiggsfieldProvider returns an UNAVAILABLE provider with a recovery command', () => {
-  const p = buildHiggsfieldProvider({ token: 't' });
-  // Phase 1 implementation always reports ready, but generate() reports
-  // unavailability because Phase 1 doesn't actually call the CLI.
+test('media: buildHiggsfieldProvider returns a READY provider once a token is supplied', () => {
+  const p = buildHiggsfieldProvider({ token: 'present' });
   const a = p.availability();
   assert.equal(a.status, PROVIDER_STATUS.READY);
 });

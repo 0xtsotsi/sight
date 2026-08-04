@@ -272,9 +272,11 @@ ipcMain.handle('higgsfield:authProbe', async () => {
   } catch {
     return { status: 'unavailable', reason: 'credential file is not valid JSON', recoveryCommand: HIGGSFIELD_RECOVERY };
   }
-  // Accept either plain (legacy) or safeStorage-encrypted (Phase 2+).
-  // The token field is the only thing we care about for "is the user
-  // authenticated". We never return it.
+  // Phase 2 reads the credential file as plain JSON. The token is checked
+  // for presence only — it is NEVER returned across the IPC boundary. If
+  // Phase 4 introduces safeStorage-encrypted at-rest credentials, swap
+  // this for safeStorage.decryptString(raw) before JSON.parse and gate
+  // on safeStorage.isEncryptionAvailable() above.
   const token = typeof parsed.token === 'string' ? parsed.token : (typeof parsed.access_token === 'string' ? parsed.access_token : null);
   if (!token || token.length === 0) {
     return { status: 'unavailable', reason: 'credential file has no token field', recoveryCommand: HIGGSFIELD_RECOVERY };
