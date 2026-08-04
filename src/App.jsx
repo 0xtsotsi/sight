@@ -386,6 +386,28 @@ export default function App() {
   // element twice still reveals it.
   const [revealTick, setRevealTick] = useState(0);
   const [rightTab, setRightTab] = useState('style'); // style | settings | head
+  // Region controls the agent panel's snap mode: 'full' overlays the canvas,
+  // 'bottom' docks below the canvas, 'left' docks to the left rail, 'right'
+  // is the default. Persisted to localStorage.
+  const [agentRegion, setAgentRegion] = useState(() => {
+    try { return localStorage.getItem('sight:agent:region') || 'right'; } catch { return 'right'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('sight:agent:region', agentRegion); } catch {}
+  }, [agentRegion]);
+  const [agentWidth, setAgentWidth] = useState(() => {
+    try {
+      const raw = localStorage.getItem('sight:agent:width');
+      if (raw) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n > 200 && n < 1600) return n;
+      }
+    } catch {}
+    return 360;
+  });
+  useEffect(() => {
+    try { localStorage.setItem('sight:agent:width', String(agentWidth)); } catch {}
+  }, [agentWidth]);
   const [a11yOpen, setA11yOpen] = useState(false);
   const [a11yResults, setA11yResults] = useState(null); // style | settings | ai
   const [aiOpen, setAiOpen] = useState(false);
@@ -2533,6 +2555,10 @@ export default function App() {
                 selectedNodeId={selectedId}
                 activePagePath={currentPage?.path}
                 showToast={showToast}
+                region={agentRegion}
+                onRegionChange={setAgentRegion}
+                width={agentWidth}
+                onWidthChange={setAgentWidth}
                 onApplyDiff={(diff) => {
                   // Dispatch through the same mutateModel path human edits
                   // use: this records the undo step, sets the new model,

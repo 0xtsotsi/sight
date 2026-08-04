@@ -22,6 +22,8 @@ import { runAgentStream } from '../agent/client.js';
 import { buildSystemPrompt } from '../agent/systemPrompt.js';
 import { getAgentSlashCommands } from '../ui/command-registry.js';
 import { recordPrompt, searchPrompts, reverseSearchStep } from './PromptHistory.jsx';
+import { turnsToMarkdown } from './transcript-md.js';
+import RegionHandle from './RegionHandle.jsx';
 import styles from './AgentPanel.module.css';
 
 // Mirror of src/agent/types.js EVENT enum. Kept inline so this file can
@@ -249,6 +251,11 @@ export default function AgentPanel({
   showToast,
   initialTurns,
   turns: turnsProp,
+  // Region controls the snap mode: 'full' | 'bottom' | 'left' | 'right'.
+  region,
+  onRegionChange,
+  width,
+  onWidthChange,
   // Test-only hook: lets the test environment inject a fixed viewport
   // height so the virtualizer renders its visible window in jsdom. Never
   // set in production.
@@ -663,11 +670,68 @@ export default function AgentPanel({
   const virtualItems = virtualizer.getVirtualItems();
   const totalHeight = virtualizer.getTotalSize();
 
+  const panelStyle = (region === 'left' || region === 'right' || !region)
+    ? { width: width || 360, height: '100%', position: 'relative' }
+    : region === 'bottom'
+      ? { height: width || 360, width: '100%', position: 'relative' }
+      : { position: 'relative' };
+
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} style={panelStyle} data-region={region || 'right'}>
+      {region !== 'full' && (region === 'left' || region === 'right' || !region) && (
+        <RegionHandle
+          edge={region === 'left' ? 'right' : 'left'}
+          value={width || 360}
+          onResize={(v) => onWidthChange?.(v)}
+          onCommit={(v) => onWidthChange?.(v)}
+        />
+      )}
+      {region === 'bottom' && (
+        <RegionHandle
+          edge="top"
+          value={width || 360}
+          onResize={(v) => onWidthChange?.(v)}
+          onCommit={(v) => onWidthChange?.(v)}
+        />
+      )}
       <div className={styles.header}>
         <strong>Agent</strong>
         <span className={styles.subtitle}>gg-coder</span>
+        <div className={styles.headerActions}>
+          <select
+            className={styles.regionSelect}
+            value={region || 'right'}
+            onChange={(e) => onRegionChange?.(e.target.value)}
+            data-testid="region-select"
+            aria-label="Snap region"
+          >
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+            <option value="bottom">Bottom</option>
+            <option value="full">Full</option>
+          </select>
+          <button
+            type="button"
+            className={styles.copyBtn}
+            onClick={async () => {
+              const md = turnsToMarkdown(turns);
+              try {
+                if (navigator?.clipboard?.writeText) {
+                  await navigator.clipboard.writeText(md);
+                  showToast?.('Transcript copied', 'success');
+                } else {
+                  showToast?.('Clipboard not available', 'error');
+                }
+              } catch (err) {
+                showToast?.('Copy failed', 'error');
+              }
+            }}
+            data-testid="copy-transcript"
+            aria-label="Copy transcript as Markdown"
+          >
+            Copy MD
+          </button>
+        </div>
       </div>
 
       {credential.status === 'loading' && (
