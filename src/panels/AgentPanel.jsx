@@ -23,6 +23,7 @@ import { buildSystemPrompt } from '../agent/systemPrompt.js';
 import { getAgentSlashCommands } from '../ui/command-registry.js';
 import { recordPrompt, searchPrompts, reverseSearchStep } from './PromptHistory.jsx';
 import { turnsToMarkdown } from './transcript-md.js';
+import { pruneTurns } from './hygiene.js';
 import RegionHandle from './RegionHandle.jsx';
 import styles from './AgentPanel.module.css';
 
@@ -581,8 +582,12 @@ export default function AgentPanel({
     } finally {
       setBusy(false);
       abortRef.current = null;
-      // Mark the assistant turn as committed so the bubble freezes.
-      setTurns((prev) => prev.map((t) => (t.id === assistantTurn.id ? { ...t, status: 'done' } : t)));
+      // Mark the assistant turn as committed so the bubble freezes,
+      // then run hygiene so the transcript doesn't grow unbounded.
+      setTurns((prev) => {
+        const committed = prev.map((t) => (t.id === assistantTurn.id ? { ...t, status: 'done' } : t));
+        return pruneTurns(committed);
+      });
     }
   }, [
     busy,
