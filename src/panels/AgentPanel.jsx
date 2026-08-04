@@ -20,6 +20,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { runAgentStream } from '../agent/client.js';
 import { buildSystemPrompt } from '../agent/systemPrompt.js';
+import { getAgentSlashCommands } from '../ui/command-registry.js';
+import { recordPrompt, searchPrompts, reverseSearchStep } from './PromptHistory.jsx';
 import styles from './AgentPanel.module.css';
 
 // Mirror of src/agent/types.js EVENT enum. Kept inline so this file can
@@ -255,6 +257,10 @@ export default function AgentPanel({
   // when the test environment cannot perform layout (e.g. jsdom). Never
   // set in production.
   disableVirtualizer,
+  // Test-only hook: controlled input value. Lets the test drive the
+  // composer without going through React's synthetic event system.
+  inputValue,
+  onInputChange,
 }) {
   const credential = useCredential();
   const [turns, setTurns] = useState(() => {
@@ -262,17 +268,125 @@ export default function AgentPanel({
     if (Array.isArray(initialTurns)) return initialTurns;
     return [];
   }); // ordered Turn[]
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(typeof inputValue === 'string' ? inputValue : '');
   const [includePage, setIncludePage] = useState(true);
   const [includeSelection, setIncludeSelection] = useState(true);
+  const [model, setModel] = useState('anthropic');
+  const [thinking, setThinking] = useState('off');
+  const [attachments, setAttachments] = useState([]);
   const [busy, setBusy] = useState(false);
   const abortRef = useRef(null);
   const scrollRef = useRef(null);
+  const composerRef = useRef(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
   // True when the user has manually scrolled away from the bottom. Suppresses
   // auto-scroll-on-new-turn so reading earlier turns isn't disrupted.
   const stickToBottomRef = useRef(true);
+
+  // ─── Composer overlays (slash menu, @-mention picker, ⌃R history) ───
+  const slashCommands = useMemo(() => getAgentSlashCommands(), []);
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashMenuIndex, setSlashMenuIndex] = useState(0);
+  const [slashQuery, setSlashQuery] = useState('');
+  const slashMenu = useMemo(() => {
+    const q = slashQuery.toLowerCase();
+    if (!q) return slashCommands;
+    return slashCommands.filter((c) => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q));
+  }, [slashCommands, slashQuery]);
+
+  const mentionList = useMemo(() => {
+    if (!pageModel || !pageModel.nodes || !Array.isArray(pageModel.nodes)) return [];
+    const out = [];
+    function walk(ns, depth) {
+      if (!Array.isArray(ns)) return;
+      for (const n of ns) {
+        if (!n) continue;
+        out.push({
+          id: n.id || `${depth}-${out.length}`,
+          label: n.name || n.tag || n.kind || n.id,
+          hint: n.kind || (n.tag ? `<${n.tag}>` : 'node'),
+        });
+        if (n.children) walk(n.children, depth + 1);
+      }
+    }
+    walk(pageModel.nodes, 0);
+    return out;
+  }, [pageModel]);
+
+  const [showMentionMenu, setShowMentionMenu] = useState(false);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const filteredMentions = useMemo(() => {
+    const q = mentionQuery.toLowerCase();
+    if (!q) return mentionList;
+    return mentionList.filter((n) => (n.label || '').toLowerCase().includes(q) || (n.hint || '').toLowerCase().includes(q));
+  }, [mentionList, mentionQuery]);
+
+  const [reverseSearchOpen, setReverseSearchOpen] = useState(false);
+  const [reverseSearchQuery, setReverseSearchQuery] = useState('');
+  const [reverseSearchIndex, setReverseSearchIndex] = useState(-1);
+  const reverseSearchMatches = useMemo(() => searchPrompts(reverseSearchQuery), [reverseSearchQuery]);
+
+  function applySlash(cmd) {
+    const el = composerRef.current;
+    if (!el) return;
+    const start = el.selectionStart ?? 0;
+    const before = input.slice(0, start);
+    const after = input.slice(start);
+    const slashAt = before.lastIndexOf('/');
+    const newStart = slashAt >= 0 ? slashAt : start;
+    const newText = input.slice(0, newStart) + cmd.insert + after;
+    setInput(newText);
+    setShowSlashMenu(false);
+    setSlashQuery('');
+    setSlashMenuIndex(0);
+    // Restore caret to the end of the inserted command.
+    requestAnimationFrame(() => {
+      const cursor = newStart + cmd.insert.length;
+      el.focus();
+      el.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function applyMention(node) {
+    const el = composerRef.current;
+    if (!el) return;
+    const start = el.selectionStart ?? 0;
+    const before = input.slice(0, start);
+    const after = input.slice(start);
+    const atAt = before.lastIndexOf('@');
+    const newStart = atAt >= 0 ? atAt : start;
+    const chip = '@' + node.label + ' ';
+    const newText = input.slice(0, newStart) + chip + after;
+    setInput(newText);
+    setShowMentionMenu(false);
+    setMentionQuery('');
+    setMentionIndex(0);
+    requestAnimationFrame(() => {
+      const cursor = newStart + chip.length;
+      el.focus();
+      el.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  const onPaste = useCallback(async (e) => {
+    if (!e.clipboardData) return;
+    const items = Array.from(e.clipboardData.items || []);
+    const files = items
+      .map((it) => it.getAsFile && it.getAsFile())
+      .filter(Boolean);
+    if (files.length === 0) return;
+    e.preventDefault();
+    const newAtts = files.map((f) => ({
+      id: 'att-' + Math.random().toString(36).slice(2, 10),
+      name: f.name || 'pasted-file',
+      size: f.size || 0,
+      type: f.type || 'application/octet-stream',
+      blob: f,
+    }));
+    setAttachments((prev) => [...prev, ...newAtts]);
+  }, []);
 
   // Virtualizer — measured rows; only the visible window is mounted.
   const virtualizer = useVirtualizer({
@@ -352,6 +466,13 @@ export default function AgentPanel({
       showToast?.('Configure a provider key first', 'error');
       return;
     }
+    // Record the prompt in local history before sending.
+    try { recordPrompt(text); } catch {}
+    // Close any open overlays.
+    setShowSlashMenu(false);
+    setShowMentionMenu(false);
+    setReverseSearchOpen(false);
+    setAttachments([]);
     const snapshot = {
       projectPath: project?.path,
       selectedNodeId: includeSelection ? selectedNodeId : null,
@@ -478,6 +599,58 @@ export default function AgentPanel({
   // ---------------------------------------------------------------------------
 
   const onKeyDown = (e) => {
+    // ⌃R / Ctrl+R — reverse-search prompt history.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R')) {
+      e.preventDefault();
+      setReverseSearchOpen(true);
+      setReverseSearchIndex(-1);
+      return;
+    }
+    // Slash menu / mention picker navigation.
+    if (showSlashMenu) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashMenuIndex((i) => Math.min(slashMenu.length - 1, i + 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashMenuIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === 'Enter' && slashMenu[slashMenuIndex]) {
+        e.preventDefault();
+        applySlash(slashMenu[slashMenuIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowSlashMenu(false);
+        return;
+      }
+    }
+    if (showMentionMenu) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex((i) => Math.min(filteredMentions.length - 1, i + 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === 'Enter' && filteredMentions[mentionIndex]) {
+        e.preventDefault();
+        applyMention(filteredMentions[mentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowMentionMenu(false);
+        return;
+      }
+    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSubmit();
@@ -580,18 +753,159 @@ export default function AgentPanel({
             />
             <span>Include selection</span>
           </label>
+          <label className={styles.toggle}>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className={styles.modelPicker}
+              data-testid="model-picker"
+              aria-label="Model provider"
+            >
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="claudeCode">Claude Code</option>
+            </select>
+          </label>
+          <label className={styles.toggle}>
+            <select
+              value={thinking}
+              onChange={(e) => setThinking(e.target.value)}
+              className={styles.thinkingPicker}
+              data-testid="thinking-picker"
+              aria-label="Thinking depth"
+            >
+              <option value="off">No thinking</option>
+              <option value="low">Light</option>
+              <option value="medium">Medium</option>
+              <option value="high">Deep</option>
+            </select>
+          </label>
         </div>
-        <textarea
-          className={styles.input}
-          placeholder={credential.status === 'ready' ? 'Ask the agent… (Enter to send, Shift+Enter for newline)' : 'Configure a provider key to begin'}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={busy || credential.status !== 'ready'}
-          rows={3}
-        />
+        <div className={styles.composerRow}>
+          <textarea
+            ref={composerRef}
+            className={styles.input}
+            placeholder={credential.status === 'ready' ? 'Ask the agent… (/ commands, @ nodes, Enter to send, Shift+Enter newline)' : 'Configure a provider key to begin'}
+            value={input}
+            onChange={(e) => {
+              const v = e.target.value;
+              setInput(v);
+              onInputChange?.(v);
+              // Detect slash-trigger at the start of a token. Use the end
+              // of the value when no selection is set (jsdom + simulate cases).
+              const caret = (typeof e.target.selectionStart === 'number' && e.target.selectionStart > 0)
+                ? e.target.selectionStart
+                : v.length;
+              const before = v.slice(0, caret);
+              const slashMatch = before.match(/(^|\s)\/([^\s]*)$/);
+              if (slashMatch) {
+                setShowSlashMenu(true);
+                setSlashQuery(slashMatch[2]);
+                setSlashMenuIndex(0);
+              } else {
+                setShowSlashMenu(false);
+              }
+              const mentionMatch = before.match(/(^|\s)@([^\s]*)$/);
+              if (mentionMatch) {
+                setShowMentionMenu(true);
+                setMentionQuery(mentionMatch[2]);
+                setMentionIndex(0);
+              } else {
+                setShowMentionMenu(false);
+              }
+            }}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            disabled={busy || credential.status !== 'ready'}
+            rows={3}
+            data-testid="composer-input"
+          />
+          {showSlashMenu && slashMenu.length > 0 && (
+            <div className={styles.popover} data-testid="slash-menu" role="listbox">
+              {slashMenu.map((c, i) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="option"
+                  aria-selected={i === slashMenuIndex}
+                  className={`${styles.popoverItem} ${i === slashMenuIndex ? styles.popoverItemActive : ''}`}
+                  onMouseDown={(e) => { e.preventDefault(); applySlash(c); }}
+                  data-testid={`slash-cmd-${c.id}`}
+                >
+                  <span className={styles.popoverCmd}>{c.label}</span>
+                  <span className={styles.popoverHint}>{c.hint}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {showMentionMenu && filteredMentions.length > 0 && (
+            <div className={styles.popover} data-testid="mention-menu" role="listbox">
+              {filteredMentions.map((n, i) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  role="option"
+                  aria-selected={i === mentionIndex}
+                  className={`${styles.popoverItem} ${i === mentionIndex ? styles.popoverItemActive : ''}`}
+                  onMouseDown={(e) => { e.preventDefault(); applyMention(n); }}
+                  data-testid={`mention-${n.id}`}
+                >
+                  <span className={styles.popoverCmd}>{n.label}</span>
+                  <span className={styles.popoverHint}>{n.hint}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {reverseSearchOpen && (
+            <div className={styles.reverseSearch} data-testid="reverse-search">
+              <span className={styles.reverseSearchLabel}>⌃R</span>
+              <input
+                className={styles.reverseSearchInput}
+                value={reverseSearchQuery}
+                onChange={(e) => {
+                  setReverseSearchQuery(e.target.value);
+                  setReverseSearchIndex(-1);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const next = reverseSearchStep(reverseSearchMatches, input, reverseSearchIndex);
+                    if (next.matched) {
+                      setInput(next.value);
+                      setReverseSearchIndex(next.index);
+                    }
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setReverseSearchOpen(false);
+                  }
+                }}
+                placeholder="search prompt history"
+                autoFocus
+              />
+            </div>
+          )}
+        </div>
+        {attachments.length > 0 && (
+          <div className={styles.attachments} data-testid="attachments">
+            {attachments.map((a) => (
+              <span key={a.id} className={styles.attachmentChip} data-testid={`attachment-${a.id}`}>
+                <span className={styles.attachmentName}>{a.name}</span>
+                <button
+                  type="button"
+                  className={styles.attachmentRemove}
+                  onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                  aria-label={`Remove ${a.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className={styles.composerActions}>
-          <span className={styles.hint}>Enter to send · Shift+Enter newline</span>
+          <span className={styles.hint}>Enter to send · Shift+Enter newline · / commands · @ nodes · ⌃R history</span>
           <button type="submit" className={styles.send} disabled={busy || !input.trim() || credential.status !== 'ready'}>
             Send
           </button>
