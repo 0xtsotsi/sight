@@ -1,7 +1,7 @@
 {
   "name": "sight",
   "productName": "Sight",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "description": "Sight — a visual builder for Astro projects — pages, layouts, components, props, live preview, and GitHub publishing.",
   "main": "electron/main.js",
   "author": "Timothy Ricks <hello@timothyricks.com>",
