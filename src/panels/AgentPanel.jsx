@@ -34,6 +34,9 @@ const EVENT = Object.freeze({
   DONE: 'done',
   MAX_TURNS: 'max_turns',
   ERROR: 'error',
+  VISUAL_DIRECTION: 'visual_direction',
+  MEDIA: 'media',
+  WORKFLOW: 'workflow',
 });
 
 // ---------------------------------------------------------------------------
@@ -259,6 +262,38 @@ export default function AgentPanel({
     updateEvents((prev) => prev.filter((e) => !(e.type === EVENT.DIFF && e.path === diff.path && e.summary === diff.summary)));
   }, [onRejectDiff, updateEvents]);
 
+  const handleVisualDirectionChoose = useCallback((directionId, variant) => {
+    showToast?.(`Visual direction pinned: ${directionId}${variant ? ' (asking for variants)' : ''}`);
+    updateEvents((prev) => prev.map((e) => (
+      e && e.type === EVENT.VISUAL_DIRECTION && e.status === 'proposed'
+        ? { ...e, status: variant ? 'variants' : 'chosen', directionId }
+        : e
+    )));
+  }, [showToast, updateEvents]);
+
+  const handleVisualDirectionSkip = useCallback(() => {
+    showToast?.('Visual direction skipped');
+    updateEvents((prev) => prev.map((e) => (
+      e && e.type === EVENT.VISUAL_DIRECTION && e.status === 'proposed'
+        ? { ...e, status: 'skipped' }
+        : e
+    )));
+  }, [showToast, updateEvents]);
+
+  const handleMediaApprove = useCallback((event) => {
+    showToast?.(`Media approved: ${event.tool} (one-shot)`);
+    updateEvents((prev) => prev.map((e) => (
+      e === event ? { ...e, status: 'ok', result: { ...e.result, status: 'ok', _approved: true } } : e
+    )));
+  }, [showToast, updateEvents]);
+
+  const handleMediaReject = useCallback((event) => {
+    showToast?.(`Media rejected: ${event.tool}`);
+    updateEvents((prev) => prev.map((e) => (
+      e === event ? { ...e, status: 'cancelled' } : e
+    )));
+  }, [showToast, updateEvents]);
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -333,6 +368,27 @@ export default function AgentPanel({
                   return <div key={i} className={styles.liveError}>{e.message}</div>;
                 case EVENT.MAX_TURNS:
                   return <div key={i} className={styles.liveMeta}>max turns reached ({e.maxTurns})</div>;
+                case EVENT.VISUAL_DIRECTION:
+                  return (
+                    <VisualDirectionCard
+                      key={i}
+                      event={e}
+                      onChoose={handleVisualDirectionChoose}
+                      onSkip={handleVisualDirectionSkip}
+                      disabled={credential.status !== 'ready'}
+                    />
+                  );
+                case EVENT.MEDIA:
+                  return (
+                    <MediaCard
+                      key={i}
+                      event={e}
+                      onApprove={handleMediaApprove}
+                      onReject={handleMediaReject}
+                    />
+                  );
+                case EVENT.WORKFLOW:
+                  return <WorkflowStep key={i} event={e} />;
                 default:
                   return null;
               }

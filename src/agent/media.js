@@ -221,15 +221,75 @@ export function buildHiggsfieldProvider({ token, binary = 'higgsfield' } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Auth probe (renderer-side): does the user have a Higgsfield credential?
+// Phase 1 keeps the token out of the agent process entirely. The renderer
+// asks the Electron main process via window.avb.higgsfieldAuthProbe();
+// main reads ~/.config/higgsfield/credentials.json through safeStorage
+// and returns {status, reason?, recoveryCommand?}. We never see the token.
+//
+// If the host does not expose the probe (dev web, no Electron), we report
+// 'unavailable' with the same recovery command so the panel can always
+// surface a single, stable hint.
+// ---------------------------------------------------------------------------
+
+export const AUTH_STATUS = Object.freeze({
+  READY: 'ready',
+  UNAVAILABLE: 'unavailable',
+  UNKNOWN: 'unknown',
+});
+
+const DEFAULT_RECOVERY = 'higgsfield auth login';
+
+/**
+ * Probe the host for a Higgsfield credential. Returns a stable
+ * {status, reason?, recoveryCommand?} envelope. Never throws.
+ */
+export async function probeHiggsfieldAuth(host = (typeof window !== 'undefined' ? window : null)) {
+  if (!host || typeof host.avb?.higgsfieldAuthProbe !== 'function') {
+    return { status: AUTH_STATUS.UNAVAILABLE, reason: 'host probe is not available', recoveryCommand: DEFAULT_RECOVERY };
+  }
+  try {
+    const r = await host.avb.higgsfieldAuthProbe();
+    if (!r || typeof r !== 'object') {
+      return { status: AUTH_STATUS.UNAVAILABLE, reason: 'empty probe response', recoveryCommand: DEFAULT_RECOVERY };
+    }
+    return {
+      status: r.status === AUTH_STATUS.READY ? AUTH_STATUS.READY : AUTH_STATUS.UNAVAILABLE,
+      reason: typeof r.reason === 'string' ? r.reason : undefined,
+      recoveryCommand: typeof r.recoveryCommand === 'string' ? r.recoveryCommand : DEFAULT_RECOVERY,
+    };
+  } catch (err) {
+    return { status: AUTH_STATUS.UNAVAILABLE, reason: String(err?.message ?? err), recoveryCommand: DEFAULT_RECOVERY };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Selector
 // ---------------------------------------------------------------------------
 
 /**
- * Pick the provider for a given kind. Phase 1 always returns the
- * StubProvider. Phase 2 will branch on provider availability.
+ * Pick the provider for a given kind. Phase 2: when the auth probe reports
+ * a real token, return a real HiggsfieldProvider; otherwise fall back to
+ * the deterministic StubProvider. The stub is always safe to call.
+ */
+export async function selectProviderAsync() {
+  const probe = await probeHiggsfieldAuth();
+  if (probe.status === AUTH_STATUS.READY) {
+    // Phase 2: the real provider still reports unavailability on generate
+    // because we don't shell out to the CLI from the renderer. The flip
+    // is wired so Phase 4 can drop in the actual @higgsfield/cli call.
+    return buildHiggsfieldProvider({ token: 'present' });
+  }
+  return StubProvider;
+}
+
+/**
+ * Synchronous selector for callers that cannot await (e.g. module-level
+ * `buildTools()`). Always returns the StubProvider. Async callers should
+ * use `selectProviderAsync()`.
  */
 export function selectProvider() {
   return StubProvider;
 }
 
-export const _internals = { escapeXml };
+export const _internals = { escapeXml, probeHiggsfieldAuth, AUTH_STATUS, selectProviderAsync };

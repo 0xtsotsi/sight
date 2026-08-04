@@ -127,8 +127,13 @@ async function adaptToolsForAgent(snapshot) {
   return adapted;
 }
 
-// Cached schema lookup keyed by tool name.
 const SCHEMA_LOADERS = {};
+const MEDIA_TOOL_NAMES = new Set([
+  'generate_image',
+  'generate_video',
+  'generate_thumbnail',
+  'pull_brandkit',
+]);
 async function loadZodSchema(name) {
   if (SCHEMA_LOADERS[name]) return SCHEMA_LOADERS[name];
   const mod = await import('./schemas.js');
@@ -227,6 +232,30 @@ function translateEvent(ev) {
             beforeJson: ev.details.beforeJson,
             afterJson: ev.details.afterJson,
           },
+        ];
+      }
+      // Media tools (generate_image, generate_video, generate_thumbnail,
+      // pull_brandkit) all return a MediaResult with a stable {status, ...}
+      // shape. Surface them as a single MEDIA event so the panel can render
+      // the right card (preview, approval, unavailable, or error).
+      if (ev.name && MEDIA_TOOL_NAMES.has(ev.name) && ev.details && typeof ev.details === 'object') {
+        return [
+          out,
+          {
+            type: EVENT.MEDIA,
+            tool: ev.name,
+            status: ev.details.status ?? (ev.isError ? 'error' : 'ok'),
+            result: ev.details,
+            toolCallId: ev.toolCallId,
+          },
+        ];
+      }
+      // If the tool returned a visual-direction proposal (e.g. from a
+      // custom agent call), surface it as a typed event too.
+      if (ev.details && typeof ev.details === 'object' && ev.details.type === 'visual_direction') {
+        return [
+          out,
+          { type: EVENT.VISUAL_DIRECTION, ...ev.details, toolCallId: ev.toolCallId },
         ];
       }
       return out;
@@ -375,4 +404,6 @@ function defaultModelFor(provider) {
 export const _internals = {
   translateEvent,
   defaultModelFor,
+  MEDIA_TOOL_NAMES,
+  adaptToolsForAgent,
 };

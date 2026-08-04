@@ -19,8 +19,15 @@
 //   {type: 'done',       totalTurns: number, totalUsage: object}
 //   {type: 'max_turns',  totalTurns: number, maxTurns: number}
 //   {type: 'error',      message: string}
-//
-// Translating from gg-agent's events to these is the client's job; see
+//   {type: 'visual_direction', workflowId: string, status: 'proposed'|'chosen'|'skipped'|'variants',
+//                                 directions?: Array<{id,title,summary,prose}>, directionId?: string}
+//   {type: 'media',      tool: 'generate_image'|'generate_video'|'generate_thumbnail'|'pull_brandkit',
+//                        status: 'ok'|'approval_required'|'unavailable'|'cancelled'|'error',
+//                        result: unknown}
+//   {type: 'workflow',   step: 'understand'|'shape'|'build'|'inspect'|'polish'|'finish'|'live',
+//                        status: 'active'|'done'|'skipped'|'error'|'awaiting',
+//                        workflowId: string, payload?: unknown}
+//// Translating from gg-agent's events to these is the client's job; see
 // translateEvent() in client.js.
 
 export const EVENT = Object.freeze({
@@ -35,6 +42,9 @@ export const EVENT = Object.freeze({
   DONE: 'done',
   MAX_TURNS: 'max_turns',
   ERROR: 'error',
+  VISUAL_DIRECTION: 'visual_direction',
+  MEDIA: 'media',
+  WORKFLOW: 'workflow',
 });
 
 export const TOOL_STATUS = Object.freeze({

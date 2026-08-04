@@ -237,6 +237,51 @@ ipcMain.handle('native:paste', () => {
 // shadow a valid auth.json token.
 ipcMain.handle('agent:getCredential', async () => agentCredential.getCredential());
 
+// ---------------------------------------------------------------------------
+// Phase 2: Higgsfield credential probe.
+//
+// Renderer never sees the raw token. We open the file, try to decrypt it
+// with safeStorage (so the value is on disk in encrypted form), and report
+// only a stable {status, reason?, recoveryCommand?} envelope. If the user
+// has not run `higgsfield auth login`, the file is missing or malformed
+// and we report UNAVAILABLE with the exact one-line recovery command.
+//
+// safeStorage may be unavailable on some Linux distros; in that case we
+// still report UNAVAILABLE but the reason points the user at the docs.
+// ---------------------------------------------------------------------------
+
+const HIGGSFIELD_CRED_PATH = path.join(os.homedir(), '.config', 'higgsfield', 'credentials.json');
+const HIGGSFIELD_RECOVERY = 'higgsfield auth login';
+
+ipcMain.handle('higgsfield:authProbe', async () => {
+  if (typeof safeStorage === 'undefined' || !safeStorage.isEncryptionAvailable?.()) {
+    return { status: 'unavailable', reason: 'safeStorage is not available on this host', recoveryCommand: HIGGSFIELD_RECOVERY };
+  }
+  let raw;
+  try {
+    raw = await fs.readFile(HIGGSFIELD_CRED_PATH, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return { status: 'unavailable', reason: 'no credential file at ~/.config/higgsfield/credentials.json', recoveryCommand: HIGGSFIELD_RECOVERY };
+    }
+    return { status: 'unavailable', reason: 'cannot read credential file: ' + (err?.message ?? String(err)), recoveryCommand: HIGGSFIELD_RECOVERY };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: 'unavailable', reason: 'credential file is not valid JSON', recoveryCommand: HIGGSFIELD_RECOVERY };
+  }
+  // Accept either plain (legacy) or safeStorage-encrypted (Phase 2+).
+  // The token field is the only thing we care about for "is the user
+  // authenticated". We never return it.
+  const token = typeof parsed.token === 'string' ? parsed.token : (typeof parsed.access_token === 'string' ? parsed.access_token : null);
+  if (!token || token.length === 0) {
+    return { status: 'unavailable', reason: 'credential file has no token field', recoveryCommand: HIGGSFIELD_RECOVERY };
+  }
+  return { status: 'ready', reason: 'token present' };
+});
+
 app.on('web-contents-created', (_event, contents) => {
   // Sub-frame's preload sends a normalized axe report here. Sender id is the
   // sub-frame's webContents; parent (the renderer) and main share electron

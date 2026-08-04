@@ -12,9 +12,12 @@ import {
   mediaCancelled,
   mediaError,
   PROVIDER_STATUS,
+  AUTH_STATUS,
   MEDIA_KIND,
   MEDIA_RESULT_STATUS,
   buildHiggsfieldProvider,
+  probeHiggsfieldAuth,
+  selectProviderAsync,
 } from '../media.js';
 
 test('media: StubProvider is always available', () => {
@@ -85,4 +88,46 @@ test('media: buildHiggsfieldProvider returns an UNAVAILABLE provider with a reco
   // unavailability because Phase 1 doesn't actually call the CLI.
   const a = p.availability();
   assert.equal(a.status, PROVIDER_STATUS.READY);
+});
+
+test('media: probeHiggsfieldAuth reports UNAVAILABLE when host is missing', async () => {
+  const r = await probeHiggsfieldAuth(null);
+  assert.equal(r.status, AUTH_STATUS.UNAVAILABLE);
+  assert.equal(r.recoveryCommand, 'higgsfield auth login');
+});
+
+test('media: probeHiggsfieldAuth reports UNAVAILABLE when host has no probe verb', async () => {
+  const host = { avb: {} };
+  const r = await probeHiggsfieldAuth(host);
+  assert.equal(r.status, AUTH_STATUS.UNAVAILABLE);
+});
+
+test('media: probeHiggsfieldAuth passes through a ready response', async () => {
+  const host = { avb: { higgsfieldAuthProbe: async () => ({ status: 'ready', reason: 'ok' }) } };
+  const r = await probeHiggsfieldAuth(host);
+  assert.equal(r.status, AUTH_STATUS.READY);
+  assert.equal(r.reason, 'ok');
+});
+
+test('media: probeHiggsfieldAuth recovers from a thrown probe', async () => {
+  const host = { avb: { higgsfieldAuthProbe: async () => { throw new Error('boom'); } } };
+  const r = await probeHiggsfieldAuth(host);
+  assert.equal(r.status, AUTH_STATUS.UNAVAILABLE);
+  assert.match(r.reason, /boom/);
+});
+
+test('media: selectProviderAsync returns the StubProvider when no token is present', async () => {
+  const p = await selectProviderAsync();
+  assert.equal(p.name, 'stub');
+});
+
+test('media: selectProviderAsync returns a HiggsfieldProvider when the probe reports ready', async () => {
+  const orig = globalThis.window;
+  globalThis.window = { avb: { higgsfieldAuthProbe: async () => ({ status: 'ready' }) } };
+  try {
+    const p = await selectProviderAsync();
+    assert.equal(p.name, 'higgsfield');
+  } finally {
+    globalThis.window = orig;
+  }
 });
