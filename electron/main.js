@@ -371,6 +371,128 @@ ipcMain.handle('designSystems:setActive', async (_e, { projectRoot, name, tokens
   return { ok: true, name, tokens: current[name].tokens };
 });
 
+// Drops (M9) — export a single frame as a portable .astro snippet bundled
+// in a tiny ZIP. The user's selected page (or a synthetic bundle for a
+// non-page node) becomes a single entry-point at `frame.astro`, plus a
+// `meta.json` capture so recipients can see the build context.
+//
+// ZIP is built with a minimal writer (no `archiver` dep) using Node's
+// built-in `node:zlib` for STORE + DEFLATE entries. The layout is the
+// canonical PKZIP APPNOTE 6.3.4 spec.
+
+const zlib = require('zlib');
+
+function crc32(buf) {
+  // IEEE 802.3 CRC32, precomputed table.
+  if (!crc32._table) {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    crc32._table = t;
+  }
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) {
+    c = (crc32._table[(c ^ buf[i]) & 0xFF] ^ (c >>> 8)) >>> 0;
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+async function buildZip(entries) {
+  // entries: { [name]: string | Buffer }
+  const now = new Date();
+  const dosTime = ((now.getHours() & 0x1f) << 11) | ((now.getMinutes() & 0x3f) << 5) | (Math.floor(now.getSeconds() / 2) & 0x1f);
+  const dosDate = (((now.getFullYear() - 1980) & 0x7f) << 9) | (((now.getMonth() + 1) & 0x0f) << 5) | (now.getDate() & 0x1f);
+  const localParts = [];
+  const central = [];
+  let offset = 0;
+  for (const name of Object.keys(entries)) {
+    const data = Buffer.isBuffer(entries[name]) ? entries[name] : Buffer.from(entries[name], 'utf8');
+    const compressed = zlib.deflateRawSync(data);
+    const useDeflate = compressed.length < data.length;
+    const payload = useDeflate ? compressed : data;
+    const method = useDeflate ? 8 : 0;
+    const crc = crc32(data);
+    const nameBuf = Buffer.from(name, 'utf8');
+    // Local file header (signature 0x04034b50).
+    const lfh = Buffer.alloc(30);
+    lfh.writeUInt32LE(0x04034b50, 0);
+    lfh.writeUInt16LE(20, 4); // version needed
+    lfh.writeUInt16LE(0, 6);  // flags
+    lfh.writeUInt16LE(method, 8);
+    lfh.writeUInt16LE(dosTime, 10);
+    lfh.writeUInt16LE(dosDate, 12);
+    lfh.writeUInt32LE(crc, 14);
+    lfh.writeUInt32LE(payload.length, 18);
+    lfh.writeUInt32LE(data.length, 22);
+    lfh.writeUInt16LE(nameBuf.length, 26);
+    lfh.writeUInt16LE(0, 28);
+    localParts.push(Buffer.concat([lfh, nameBuf, payload]));
+    // Central directory header (signature 0x02014b50).
+    const cdh = Buffer.alloc(46);
+    cdh.writeUInt32LE(0x02014b50, 0);
+    cdh.writeUInt16LE(20, 4); // version made by
+    cdh.writeUInt16LE(20, 6); // version needed
+    cdh.writeUInt16LE(0, 8);
+    cdh.writeUInt16LE(method, 10);
+    cdh.writeUInt16LE(dosTime, 12);
+    cdh.writeUInt16LE(dosDate, 14);
+    cdh.writeUInt32LE(crc, 16);
+    cdh.writeUInt32LE(payload.length, 20);
+    cdh.writeUInt32LE(data.length, 24);
+    cdh.writeUInt16LE(nameBuf.length, 28);
+    cdh.writeUInt16LE(0, 30);
+    cdh.writeUInt16LE(0, 32);
+    cdh.writeUInt16LE(0, 34);
+    cdh.writeUInt16LE(0, 36);
+    cdh.writeUInt32LE(0, 38);
+    cdh.writeUInt32LE(offset, 42);
+    central.push(Buffer.concat([cdh, nameBuf]));
+    offset += lfh.length + nameBuf.length + payload.length;
+  }
+  const local = Buffer.concat(localParts);
+  const centralBuf = Buffer.concat(central);
+  // End of central directory record (signature 0x06054b50).
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(Object.keys(entries).length, 8);
+  eocd.writeUInt16LE(Object.keys(entries).length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+  eocd.writeUInt16LE(0, 20);
+  return Buffer.concat([local, centralBuf, eocd]);
+}
+ipcMain.handle('agent:exportFrame', async (_e, { projectRoot, framePath, frameName, sources } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!framePath || typeof framePath !== 'string') return { ok: false, error: 'framePath is required' };
+  const safePath = path.resolve(framePath);
+  if (!(safePath + path.sep).startsWith(path.resolve(projectRoot) + path.sep)) {
+    return { ok: false, error: 'framePath is outside the project' };
+  }
+  if (!fs.existsSync(safePath)) return { ok: false, error: 'frame file not found' };
+  const frameSource = fs.readFileSync(safePath, 'utf8');
+  const meta = {
+    name: frameName || path.basename(safePath),
+    sourcePath: path.relative(projectRoot, safePath),
+    exportedAt: new Date().toISOString(),
+    sources: Array.isArray(sources) ? sources : [],
+  };
+  const zip = await buildZip({
+    'frame.astro': frameSource,
+    'meta.json': JSON.stringify(meta, null, 2),
+  });
+  const outDir = path.join(projectRoot, '.sight', 'drops');
+  mkdirSync(outDir, { recursive: true });
+  const outName = (frameName || path.basename(safePath, '.astro')).replace(/[^\w.-]+/g, '-') + '.drop.zip';
+  const outPath = path.join(outDir, outName);
+  fs.writeFileSync(outPath, zip);
+  return { ok: true, path: outPath, bytes: zip.length };
+});
+
 ipcMain.handle('agent:pruneBackgroundTasks', async (_e, { projectRoot } = {}) => {
   if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, removed: 0 };
   const { pruneStaleEntries } = require('./worktreeShim.js');

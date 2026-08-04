@@ -2707,6 +2707,20 @@ export default function App() {
             setSelectedId(id);
             setRevealTick((t) => t + 1);
           },
+          exportFrame: (page) => {
+            if (!page || !project) {
+              showToast?.('No active page to export', 'error');
+              return;
+            }
+            const r = window.avb?.exportFrame
+              ? window.avb.exportFrame({ projectRoot: project.path, framePath: page.path, frameName: page.name })
+              : null;
+            if (r && r.ok) {
+              showToast?.(`Drop written: ${r.path}`, 'success');
+            } else if (r && r.error) {
+              showToast?.(cleanError(r.error), 'error');
+            }
+          },
         }}
       />
     </div>
