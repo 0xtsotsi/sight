@@ -564,6 +564,64 @@ test('M4-2: typing dots render for pending assistant turn', async () => {
   assert.match(html, /thinking/);
 });
 
+// ---------------------------------------------------------------------------
+// M5 tests — transcript hygiene (image expiry, tool result collapse).
+// ---------------------------------------------------------------------------
+
+test('M5-1: image attachments expire after the threshold', async () => {
+  const { pruneTurns } = await import('../hygiene.js');
+  const turns = [];
+  for (let i = 0; i < 6; i++) {
+    turns.push({
+      id: `a${i}`,
+      role: 'assistant',
+      content: '',
+      ts: Date.now(),
+      events: [
+        { type: 'media', kind: 'image', svg: '<svg>' + 'x'.repeat(100) + '</svg>', provider: 'stub' },
+      ],
+      status: 'done',
+    });
+  }
+  const pruned = pruneTurns(turns, { keepImageAttachments: 5 });
+  // First 5 turns keep the attachment; the 6th's media event is cleared.
+  const keepFirst5 = pruned.slice(0, 5).every((t) => t.events.some((e) => e.svg && !e.cleared));
+  assert.ok(keepFirst5, 'first 5 image attachments should be preserved');
+  const last = pruned[5].events[0];
+  assert.equal(last.cleared, true);
+  assert.equal(last.result, '[Image cleared]');
+});
+
+test('M5-2: tool results > 5KB are collapsed', async () => {
+  const { pruneTurns } = await import('../hygiene.js');
+  const huge = 'x'.repeat(10 * 1024);
+  const turns = [
+    {
+      id: 'u1',
+      role: 'user',
+      content: 'Find something',
+      ts: Date.now(),
+      events: [],
+      status: 'done',
+    },
+    {
+      id: 'a1',
+      role: 'assistant',
+      content: 'Done.',
+      ts: Date.now(),
+      events: [
+        { type: 'tool', name: 'search', status: 'done', result: huge, durationMs: 12 },
+      ],
+      status: 'done',
+    },
+  ];
+  const pruned = pruneTurns(turns);
+  const toolEvent = pruned[1].events[0];
+  assert.equal(toolEvent.truncated, true);
+  assert.ok(toolEvent.originalBytes > 5 * 1024);
+  assert.match(toolEvent.result, /Tool result cleared/);
+});
+
 test('M3-2: transcript-md serializer produces stable output', async () => {
   const { turnsToMarkdown } = await import('../transcript-md.js');
   const turns = [
