@@ -105,6 +105,44 @@ test('mcp: invalid JSON-RPC request returns invalid-request', async () => {
   assert.equal(res.error.code, -32600);
 });
 
+test('mcp: skills/list returns the bundled catalog with summaries', async () => {
+  const res = await dispatch({ jsonrpc: '2.0', id: 50, method: 'skills/list' });
+  assert.equal(res.jsonrpc, '2.0');
+  assert.ok(Array.isArray(res.result.skills));
+  assert.ok(res.result.skills.length >= 3);
+  for (const s of res.result.skills) {
+    assert.equal(typeof s.name, 'string');
+    assert.equal(typeof s.version, 'string');
+    assert.equal(typeof s.toolCount, 'number');
+    assert.equal(s.instructions, undefined); // stripped
+  }
+});
+
+test('mcp: tools/list now exposes run_skill as a synthetic tool', async () => {
+  const res = await dispatch({ jsonrpc: '2.0', id: 51, method: 'tools/list' });
+  const names = res.result.tools.map((t) => t.name);
+  assert.ok(names.includes('run_skill'), 'run_skill should appear in tools/list');
+  const rs = res.result.tools.find((t) => t.name === 'run_skill');
+  assert.equal(rs.inputSchema.additionalProperties, false);
+  assert.equal(rs.annotations.readOnlyHint, true);
+});
+
+test('mcp: tools/call run_skill returns a structured skill block', async () => {
+  setSnapshot(snapshot());
+  const res = await dispatch({ jsonrpc: '2.0', id: 52, method: 'tools/call', params: { name: 'run_skill', arguments: { name: 'impeccable-design-guardian' } } });
+  assert.equal(res.jsonrpc, '2.0');
+  assert.ok(res.result.structuredContent);
+  assert.equal(res.result.structuredContent.ok, true);
+  assert.match(res.result.structuredContent.block, /impeccable-design-guardian/);
+});
+
+test('mcp: tools/call run_skill refuses an unknown skill', async () => {
+  setSnapshot(snapshot());
+  const res = await dispatch({ jsonrpc: '2.0', id: 53, method: 'tools/call', params: { name: 'run_skill', arguments: { name: 'nope' } } });
+  assert.equal(res.result.structuredContent.ok, false);
+  assert.match(res.result.structuredContent.reason, /unknown skill/);
+});
+
 test('mcp: missing snapshot does not crash the server; tool call returns a structured error', async () => {
   setSnapshot(snapshot());
   const res = await dispatch({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'list_background_tasks', arguments: {} } });
