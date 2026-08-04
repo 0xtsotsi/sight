@@ -77,6 +77,15 @@ function emptyTurn(role, content, ts = Date.now()) {
   return { id: newTurnId(role), role, content, ts, events: [], status: 'done' };
 }
 
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 // ---------------------------------------------------------------------------
 // Hook: read agent credential once per panel mount.
 // ---------------------------------------------------------------------------
@@ -184,6 +193,7 @@ function TurnBubble({ turn, onApply, onReject, disabled, onVisualDirectionChoose
   return (
     <div data-testid="turn" data-role={turn.role} className={`${styles.message} ${styles[`message_${turn.role}`]}`}>
       <div className={styles.messageRole}>{turn.role}</div>
+      <span className={styles.timestamp} data-testid="turn-timestamp">{formatTimestamp(turn.ts)}</span>
       <div className={styles.messageContent}>{turn.content}</div>
       {!isUser && eventList.length > 0 && (
         <div className={styles.live}>
@@ -193,7 +203,7 @@ function TurnBubble({ turn, onApply, onReject, disabled, onVisualDirectionChoose
               case EVENT.TEXT:
                 return <span key={i} className={styles.liveText}>{e.delta}</span>;
               case EVENT.THINKING:
-                return <div key={i} className={styles.liveThinking}>{e.delta}</div>;
+                return <ThinkingBlock key={i} delta={e.delta} startedAt={e.ts || Date.now()} />;
               case EVENT.TOOL:
                 return (
                   <ToolTrace
@@ -229,11 +239,64 @@ function TurnBubble({ turn, onApply, onReject, disabled, onVisualDirectionChoose
             }
           })}
           {busy && turn.status === 'pending' && (
-            <button className={styles.abort} onClick={onAbort}>Stop</button>
+            <TypingDots />
+          )}
+          {busy && turn.status === 'pending' && (
+            <button className={styles.abort} onClick={onAbort} aria-label="Stop generating">Stop</button>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ThinkingBlock — collapsible; the header shows a live `mm:ss` timer while
+// the thinking chunk is still streaming. Collapses when the user clicks the
+// caret.
+// ---------------------------------------------------------------------------
+
+function ThinkingBlock({ delta, startedAt }) {
+  const [open, setOpen] = useState(true);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = Math.max(0, now - (startedAt || now));
+  const seconds = Math.floor(elapsed / 1000);
+  const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const ss = String(seconds % 60).padStart(2, '0');
+  return (
+    <div className={styles.thinkingBlock}>
+      <button
+        type="button"
+        className={styles.thinkingHeader}
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <span className={styles.thinkingCaret}>{open ? '▾' : '▸'}</span>
+        <span className={styles.thinkingLabel}>thinking</span>
+        <span className={styles.thinkingTimer} data-testid="thinking-timer">{mm}:{ss}</span>
+      </button>
+      {open && (
+        <div className={styles.thinkingBody}>{delta}</div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TypingDots — three pulsing dots shown while the agent is generating.
+// ---------------------------------------------------------------------------
+
+function TypingDots() {
+  return (
+    <span className={styles.typingDots} aria-label="Generating" data-testid="typing-dots">
+      <span className={styles.typingDot} />
+      <span className={styles.typingDot} />
+      <span className={styles.typingDot} />
+    </span>
   );
 }
 
