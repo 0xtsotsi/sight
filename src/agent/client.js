@@ -175,7 +175,27 @@ async function loadMediaZodSchema(name) {
 }
 
 async function resolveZodSchema(name) {
-  return (await loadZodSchema(name)) || (await loadMediaZodSchema(name));
+  return (await loadZodSchema(name)) || (await loadMediaZodSchema(name)) || (await loadOrchestratorZodSchema(name));
+}
+
+/**
+ * Best-effort: pull the zod schema for an orchestrator tool. Loaded
+ * lazily so tools-orchestrator.js is not pulled in unless the agent
+ * actually calls one of these tools.
+ * @internal
+ */
+async function loadOrchestratorZodSchema(name) {
+  if (SCHEMA_LOADERS[name]) return SCHEMA_LOADERS[name];
+  const mod = await import('./tools-orchestrator.js');
+  const map = {
+    capture_evidence: mod.captureEvidenceArgsSchema,
+    open_background_task: mod.openBackgroundTaskArgsSchema,
+    finalize_background_task: mod.finalizeBackgroundTaskArgsSchema,
+    list_background_tasks: mod.listBackgroundTasksArgsSchema,
+    run_live_review: mod.runLiveReviewArgsSchema,
+  };
+  SCHEMA_LOADERS[name] = map[name];
+  return map[name];
 }
 
 // ---------------------------------------------------------------------------
@@ -429,5 +449,6 @@ export const _internals = {
   translateEvent,
   defaultModelFor,
   MEDIA_TOOL_NAMES,
+  EVIDENCE_TOOL_NAMES,
   adaptToolsForAgent,
 };
