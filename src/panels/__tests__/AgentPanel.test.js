@@ -21,6 +21,7 @@ import { JSDOM } from 'jsdom';
 import esbuild from 'esbuild';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
@@ -623,6 +624,33 @@ test('M5-2: tool results > 5KB are collapsed', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// M10 tests — CSS presets index.
+// ---------------------------------------------------------------------------
+
+test('M10-1: 10 presets are registered (5 glass + 5 fill)', async () => {
+  // We inspect the source file directly because InsertSearch.jsx uses
+  // JSX and depends on the CSS module shim, which our test env can't
+  // load. The PRESETS array is a plain const so the regex match is
+  // good enough for the test.
+  const src = fsSync.readFileSync('src/ui/InsertSearch.jsx', 'utf8');
+  const match = src.match(/export const PRESETS = \[[\s\S]+?\];/);
+  assert.ok(match, 'PRESETS export must exist');
+  const len = (match[0].match(/id: /g) || []).length;
+  assert.equal(len, 10, `expected 10 presets, got ${len}`);
+  assert.match(match[0], /glass-frost/);
+  assert.match(match[0], /fill-aurora/);
+
+  // The CSS file declares 5 glass + 5 fill classes keyed by data-preset.
+  // We count only the top-level selectors (not pseudo-elements like
+  // `::after` that share the same data-preset attribute).
+  const css = fsSync.readFileSync('src/styles/presets/index.css', 'utf8');
+  const glass = (css.match(/^\[data-preset="glass-[^"]+"\] \{/gm) || []).length;
+  const fill = (css.match(/^\[data-preset="fill-[^"]+"\] \{/gm) || []).length;
+  assert.equal(glass, 5, `expected 5 glass presets, got ${glass}`);
+  assert.equal(fill, 5, `expected 5 fill presets, got ${fill}`);
+});
+
 // ---------------------------------------------------------------------------
 // M7 tests — parallel agents: DiffCard conflict badge + streamId.
 // ---------------------------------------------------------------------------
