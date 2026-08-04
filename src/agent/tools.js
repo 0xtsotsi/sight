@@ -28,6 +28,7 @@ import {
   scanProjectArgsSchema,
   snapshotSchema,
 } from './schemas.js';
+import { buildMediaTools } from './tools-media.js';
 
 // ---------------------------------------------------------------------------
 // JSON Schema conversion
@@ -210,6 +211,10 @@ async function applyPageDiff(ctx, args) {
 // ---------------------------------------------------------------------------
 
 export function buildTools() {
+  // Phase 1: the existing 5 tools plus the 4 media tools from
+  // tools-media.js. Media tools are wired as PROPOSAL surfaces — the
+  // user always applies the result via the panel. See src/agent/policy.js
+  // and src/agent/media.js for the contract.
   return [
     {
       name: 'list_pages',
@@ -246,6 +251,7 @@ export function buildTools() {
       inputSchema: inputSchemas.apply_page_diff,
       handler: (args, ctx) => applyPageDiff(ctx, args),
     },
+    ...buildMediaTools(),
   ];
 }
 
