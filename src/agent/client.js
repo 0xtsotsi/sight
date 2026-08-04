@@ -279,8 +279,10 @@ export async function* runAgentStream({
     yield {
       type: EVENT.ERROR,
       message:
-        'No provider API key configured. Add MINIMAX_API_KEY to ~/.gg/settings.json ' +
-        'or run `ggcoder login` to populate ~/.gg/auth.json.',
+        'No provider API key configured. Add one of MINIMAX_API_KEY, ' +
+        'ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY to ' +
+        '~/.gg/settings.json — or run `ggcoder login` to populate ' +
+        '~/.gg/auth.json. See electron/agentCredential.js for the lookup table.',
     };
     return;
   }
