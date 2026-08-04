@@ -817,6 +817,10 @@ contextBridge.exposeInMainWorld('avb', {
   // the file path or other settings keys. See electron/main.js
   // ipcMain.handle('agent:getCredential', ...).
   getAgentCredential: invoke('agent:getCredential'),
+  // Phase 2: probe for a Higgsfield credential. Renderer never sees the
+  // token — main returns only {status, reason?, recoveryCommand?}.
+  // See electron/main.js ipcMain.handle('higgsfield:authProbe', ...).
+  higgsfieldAuthProbe: invoke('higgsfield:authProbe'),
   // AI inline-edit. Renderer never sees the API key value — `aiSetKey`
   // sends it to main once and main stores it in safeStorage. Subsequent
   // calls return only booleans / provider metadata.
@@ -829,6 +833,7 @@ contextBridge.exposeInMainWorld('avb', {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on('ai:stream', listener);
     return () => ipcRenderer.removeListener('ai:stream', listener);
+  },
 
   // View-transitions studio (read-only scan of the project's pages + layouts).
   listTransitions: invoke('viewTransitions:list'),

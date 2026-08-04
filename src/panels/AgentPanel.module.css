@@ -370,3 +370,232 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ---------------------------------------------------------------------------
+ * Phase 2: visual-direction picker, media card, workflow step.
+ * Match the existing card aesthetic (subtle border, soft surface, 6-8px
+ * radius, low-emphasis meta text, accent on primary action).
+ * ------------------------------------------------------------------------- */
+
+.directionCard {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.directionHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.directionHint {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.directionList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.directionItem {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.directionItemTitle {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.directionItemSummary {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.directionItemProse {
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.7;
+  white-space: pre-wrap;
+}
+
+.directionActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.directionChoose,
+.directionVariants,
+.directionSkip {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.directionChoose {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.directionVariants {
+  opacity: 0.85;
+}
+
+.directionChoose:disabled,
+.directionVariants:disabled,
+.directionSkip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.directionFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.directionMeta {
+  margin: 6px 12px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.directionMeta code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.mediaCard {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mediaHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mediaTier,
+.mediaLicense {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.mediaBody {
+  font-size: 12px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mediaPrompt,
+.mediaReason {
+  opacity: 0.85;
+}
+
+.mediaCommand {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  padding: 2px 6px;
+  border-radius: 3px;
+  align-self: flex-start;
+}
+
+.mediaPreview {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.mediaPreview svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.mediaActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.mediaApprove,
+.mediaReject {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.mediaApprove {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mediaMeta {
+  margin: 4px 12px;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.workflowStep {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 12px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: 0.75;
+}
+
+.workflowStepName {
+  text-transform: lowercase;
+}
+
+.workflowStepStatus {
+  opacity: 0.6;
+}
+
+.workflowStep_active .workflowStepName {
+  color: var(--accent);
+  font-weight: 600;
+}

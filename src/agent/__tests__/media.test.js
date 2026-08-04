@@ -131,7 +131,6 @@ test('media: selectProviderAsync returns a HiggsfieldProvider when the probe rep
     globalThis.window = orig;
   }
 });
-
 test('media: tryParseJson parses valid JSON and returns null on garbage', () => {
   const ok = tryParseJson('{"a":1}');
   assert.equal(ok.a, 1);
@@ -166,3 +165,4 @@ test('media: buildHiggsfieldProvider returns an unavailable result when the CLI 
   assert.match(out.reason, /not installed/);
   assert.equal(out.recoveryCommand, 'npm i -g @higgsfield/cli');
 });
+
