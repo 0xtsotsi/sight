@@ -169,3 +169,26 @@ test('worktree: finalizeTask with a bad action throws WorktreeError', () => {
   const task = openBackgroundTask({ projectRoot: dir, brief: 'x' });
   assert.throws(() => finalizeTask({ projectRoot: dir, taskId: task.taskId, action: 'bogus' }), /action must be/);
 });
+
+test('worktree: pruneStaleEntries matches worktrees across /var vs /private/var on macOS', () => {
+  const dir = initTempRepo();
+  const task = openBackgroundTask({ projectRoot: dir, brief: 'x' });
+  // Force-remove without finalize (simulates a crash).
+  removeWorktree({ projectRoot: dir, worktreePath: task.worktreePath, force: true });
+  execFileSync('git', ['branch', '-D', task.branch], { cwd: dir });
+  // The registry still has the row; the path is unresolved. pruneStaleEntries
+  // must walk the path through realpath and fall back to basename match.
+  const result = pruneStaleEntries(dir);
+  assert.equal(result.removed, 1);
+  assert.equal(readRegistry(dir).tasks.length, 0);
+});
+
+test('worktree: pruneStaleEntries is a no-op when nothing changed', () => {
+  const dir = initTempRepo();
+  const task = openBackgroundTask({ projectRoot: dir, brief: 'x' });
+  const result = pruneStaleEntries(dir);
+  assert.equal(result.removed, 0);
+  assert.equal(readRegistry(dir).tasks.length, 1);
+  // cleanup
+  finalizeTask({ projectRoot: dir, taskId: task.taskId, action: 'discard' });
+});
