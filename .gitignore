@@ -15,5 +15,8 @@ release/
 # Local agent-loop working artifacts (created by the chat assistant at
 # runtime — never commit):
 .gg/
-docs/
 CLAUDE.md
+# docs/ is mostly internal notes; the screenshots subdir is committed
+# under docs/screenshots/ for milestone verification.
+docs/*
+!docs/screenshots/
