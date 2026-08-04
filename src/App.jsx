@@ -1,4 +1,44 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+
+// Browser-preview shim: when running in a plain browser (not Electron), the
+// `window.avb` IPC bridge from electron/preload.js is missing. Provide a
+// no-op stub so the renderer can mount without referencing `undefined`.
+// In production (Electron), the preload scrubs this off — but the stub
+// being a no-op is harmless because every call site treats it as such.
+if (typeof window !== 'undefined' && !window.avb) {
+  const noopPromise = () => Promise.resolve(null);
+  window.avb = new Proxy({}, {
+    get(_, prop) {
+      if (prop === 'addRecent' || prop === 'nativeCopy' || prop === 'nativePaste'
+          || prop === 'openExternal' || prop === 'openDevTools'
+          || prop === 'checkForUpdates' || prop === 'captureThumb'
+          || prop === 'installDeps' || prop === 'watchProject'
+          || prop === 'runA11yAudit' || prop === 'importPathFor'
+          || prop === 'deletePage' || prop === 'createPage'
+          || prop === 'movePage' || prop === 'createPageFolder'
+          || prop === 'renamePageFolder' || prop === 'deletePageFolder'
+          || prop === 'writePage' || prop === 'writePageRaw'
+          || prop === 'readPage' || prop === 'readAssetText'
+          || prop === 'scanProject' || prop === 'startDevServer'
+          || prop === 'hasNodeModules' || prop === 'diagnoseDev'
+          || prop === 'listRecents' || prop === 'getAgentCredential'
+          || prop === 'exportFrame' || prop === 'listBackgroundTasks'
+          || prop === 'adoptBackgroundTask' || prop === 'pruneBackgroundTasks'
+          || prop === 'designSystems:list' || prop === 'designSystems:setActive'
+          || prop === 'project:snapshot' || prop === 'project:listSnapshots'
+          || prop === 'project:restoreSnapshot') {
+        return noopPromise;
+      }
+      if (prop === 'onProgress' || prop === 'onDevExit' || prop === 'onDevLog'
+          || prop === 'onA11yResults' || prop === 'onMenu' || prop === 'onFsChanged') {
+        return () => () => {}; // unsubscribe
+      }
+      // Members that don't match either fallback get a noop whose
+      // identity is stable so React doesn't re-render.
+      return undefined;
+    },
+  });
+}
 import WelcomeScreen from './panels/WelcomeScreen.jsx';
 import PagesPanel from './panels/PagesPanel.jsx';
 import PalettePanel from './panels/PalettePanel.jsx';
@@ -938,6 +978,10 @@ export default function App() {
   }, []);
 
   // target: {parentId: string|null, index: number} | null (append at end)
+  // NOTE: setProp is declared later in the function body. We forward-reference
+  // it via a closure so the useCallback's dependency array doesn't trigger a
+  // TDZ on the first render. The latest setter is captured via a ref.
+  const setPropRef = useRef(null);
   const addComponent = useCallback(
     async (componentName, target) => {
       const comp = insertables.find((c) => c.name === componentName);
@@ -988,11 +1032,11 @@ export default function App() {
         requestAsset({
           mediaKind: 'image',
           current: null,
-          onPick: (rel) => setProp(id, 'src', { type: 'string', value: '/' + rel }, true),
+          onPick: (rel) => setPropRef.current && setPropRef.current(id, 'src', { type: 'string', value: '/' + rel }, true),
         });
       }
     },
-    [insertables, mutateModel, resolveImportPath, setProp]
+    [insertables, mutateModel, resolveImportPath]
   );
 
   const moveNode = useCallback(
@@ -1606,6 +1650,9 @@ export default function App() {
     },
     [mutateModel]
   );
+  // Keep the forward-ref in sync with the latest setProp so callbacks
+  // declared earlier (e.g. addComponent) can call it without a TDZ.
+  setPropRef.current = setProp;
 
   // Renames an attribute in place, preserving its value and position.
   const renameProp = useCallback(
