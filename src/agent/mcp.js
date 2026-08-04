@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import readline from 'node:readline';
 import { buildTools } from './tools.js';
 import { toolManifestEntry, listToolNames, needsApproval, hashArgsForApproval } from './policy.js';
+import { listSkillSummaries, runSkill as runSkillInternal, intersectWithHost } from './skills.js';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -127,7 +128,19 @@ function handleListTools(id) {
     inputSchema: schemaForTool(t.name),
     annotations: annotationsForTool(t.name) ?? undefined,
   }));
+  // Expose a run_skill pseudo-tool so external agents can activate a
+  // skill without going through the in-app panel.
+  tools.push({
+    name: 'run_skill',
+    description: 'Activate a bundled or user-installed skill. The skill\'s instructions are injected into the next agent turn, and its allowedTools are intersected with the host manifest.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  });
   return rpcResult(id, { tools });
+}
+
+function handleListSkills(id) {
+  return rpcResult(id, { skills: listSkillSummaries() });
 }
 
 // ---------------------------------------------------------------------------
@@ -205,9 +218,22 @@ export async function dispatch(req) {
       return rpcResult(id, {});
     case 'tools/list':
       return handleListTools(id);
-    case 'tools/call':
+    case 'skills/list':
+      return handleListSkills(id);
+    case 'tools/call': {
+      // Special-case run_skill so external agents can activate skills
+      // through the same tools/call flow.
+      if (params && params.name === 'run_skill') {
+        const skillName = params.arguments && params.arguments.name;
+        if (typeof skillName !== 'string' || !skillName) {
+          return rpcError(id, -32602, 'run_skill: name is required');
+        }
+        const r = runSkillInternal(skillName, { userInvoked: true });
+        if (!r.ok) return rpcResult(id, { content: [{ type: 'text', text: r.reason }], structuredContent: r, isError: true });
+        return rpcResult(id, { content: [{ type: 'text', text: r.block }], structuredContent: r });
+      }
       return await handleCallTool(id, params);
-    default:
+    }    default:
       return rpcError(id, -32601, 'method not found: ' + method);
   }
 }

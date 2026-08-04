@@ -56,3 +56,17 @@ test('design standard: inactive returns empty block', () => {
   const block = buildDesignStandardBlock({ active: false, mode: 'plan' });
   assert.equal(block, '');
 });
+
+test('designStandard: block mentions active skills when provided', () => {
+  const block = buildDesignStandardBlock({ active: true, mode: 'plan', activeSkills: [
+    { name: 'higgsfield-media-brief', version: '1.0.0', license: 'Apache-2.0', description: 'media drafter', userInvocable: true, modelInvocable: false },
+  ] });
+  assert.match(block, /Active skills:/);
+  assert.match(block, /higgsfield-media-brief/);
+  assert.match(block, /user-only/);
+});
+
+test('designStandard: block is empty when inactive even with skills', () => {
+  const block = buildDesignStandardBlock({ active: false, mode: 'plan', activeSkills: [{ name: 'x', version: '1', license: 'MIT', description: 'd', userInvocable: true, modelInvocable: true }] });
+  assert.equal(block, '');
+});

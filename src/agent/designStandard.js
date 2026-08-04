@@ -52,10 +52,10 @@ export function loadImpeccableStandard() {
  * UI design work. Returns an empty string when the user has not opted in or
  * when the standard file is unavailable. Callers must check `available`.
  */
-export function buildDesignStandardBlock({ active = true, mode = 'plan' } = {}) {
+export function buildDesignStandardBlock({ active = true, mode = 'plan', activeSkills = [] } = {}) {
   if (!active) return '';
   const body = loadImpeccableStandard();
-  if (!body) return '';
+  if (!body && activeSkills.length === 0) return '';
   const attribution =
     'Design standard: Impeccable v' + IMPECCABLE_VERSION + ' (' + IMPECCABLE_REPO +
     '), Apache-2.0. The brief wins; the standard enforces craft, accessibility, and verification.';
@@ -64,7 +64,15 @@ export function buildDesignStandardBlock({ active = true, mode = 'plan' } = {}) 
     : mode === 'build'
       ? 'You are in Build mode: propose structured diffs only. Never write files directly.'
       : 'You are in Plan mode: read the project, classify the request, and present a plan before any change.';
-  return [attribution, modeHint, '', body].join('\n');
+  const skillHints = activeSkills.length > 0
+    ? '\n\nActive skills:\n' + activeSkills.map((s) => {
+        const inv = s.userInvocable && s.modelInvocable ? 'user+model'
+          : s.userInvocable ? 'user-only'
+          : 'model-only';
+        return '- ' + s.name + ' v' + s.version + ' (' + s.license + ', ' + inv + '): ' + s.description;
+      }).join('\n')
+    : '';
+  return [attribution, modeHint, '', body, skillHints].filter(Boolean).join('\n');
 }
 
 /**
@@ -79,9 +87,4 @@ export function isDesignStandardAvailable() {
  * Override the standard path. Used by tests only.
  * @internal
  */
-export function _setStandardPathForTests(p) {
-  cached = null;
-  if (p === null) return;
-  // Re-read lazily on the next call; tests will usually inject via
-  // import.meta.resolve rather than touching this hook.
-}
+export const _internals = { loadImpeccableStandard, buildDesignStandardBlock, IMPECCABLE_VERSION };
