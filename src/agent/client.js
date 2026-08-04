@@ -105,7 +105,7 @@ async function adaptToolsForAgent(snapshot) {
       // gg-agent expects a zod schema in `parameters`; tools.js owns the
       // zod schemas in src/agent/schemas.js. We re-import them here so the
       // agent gets the same validation the tools layer already enforces.
-      parameters: await loadZodSchema(t.name),
+      parameters: await resolveZodSchema(t.name),
       execute: async (args, _context) => {
         const result = await t.handler(args, snapshot);
         // gg-agent expects tool results as strings or {content, details}.
@@ -141,6 +141,28 @@ async function loadZodSchema(name) {
   };
   SCHEMA_LOADERS[name] = map[name];
   return map[name];
+}
+
+/**
+ * Best-effort: pull the zod schema for a media tool. We do this lazily so
+ * tools-media.js is not loaded until it is actually needed.
+ * @internal
+ */
+async function loadMediaZodSchema(name) {
+  if (SCHEMA_LOADERS[name]) return SCHEMA_LOADERS[name];
+  const mod = await import('./tools-media.js');
+  const map = {
+    generate_image: mod.generateImageArgsSchema,
+    generate_video: mod.generateVideoArgsSchema,
+    generate_thumbnail: mod.generateThumbnailArgsSchema,
+    pull_brandkit: mod.pullBrandkitArgsSchema,
+  };
+  SCHEMA_LOADERS[name] = map[name];
+  return map[name];
+}
+
+async function resolveZodSchema(name) {
+  return (await loadZodSchema(name)) || (await loadMediaZodSchema(name));
 }
 
 // ---------------------------------------------------------------------------
