@@ -15,7 +15,23 @@ const TABS = [
   { key: 'all', label: 'All results' },
   { key: 'components', label: 'Components' },
   { key: 'elements', label: 'Elements' },
+  { key: 'effects', label: 'Effects' },
   { key: 'other', label: 'Other' },
+];
+
+// Glass + fill presets (M10). Each entry applies a `data-preset="<id>"`
+// to the inserted node; the styling is in src/styles/presets/index.css.
+export const PRESETS = [
+  { id: 'glass-frost', group: 'Effects', label: 'Glass — frost', hint: 'backdrop blur on translucent surface' },
+  { id: 'glass-tint', group: 'Effects', label: 'Glass — tint', hint: 'tinted backdrop blur' },
+  { id: 'glass-clear', group: 'Effects', label: 'Glass — clear', hint: 'thin border + low-opacity blur' },
+  { id: 'glass-noise', group: 'Effects', label: 'Glass — noise', hint: 'backdrop blur with noise overlay' },
+  { id: 'glass-edge', group: 'Effects', label: 'Glass — edge', hint: 'highlight + soft inner border' },
+  { id: 'fill-aurora', group: 'Effects', label: 'Fill — aurora', hint: 'animated radial-gradient mesh' },
+  { id: 'fill-mesh', group: 'Effects', label: 'Fill — mesh', hint: 'multi-stop gradient' },
+  { id: 'fill-flat', group: 'Effects', label: 'Fill — flat', hint: 'solid color with depth shadow' },
+  { id: 'fill-stripe', group: 'Effects', label: 'Fill — stripe', hint: 'repeating diagonal stripes' },
+  { id: 'fill-grain', group: 'Effects', label: 'Fill — grain', hint: 'warm paper-grain overlay' },
 ];
 
 // Quick-insert palette (⌘F / ⌘E): fuzzy-searches components, HTML tags, and
@@ -58,7 +74,15 @@ export default function InsertSearch({ components, onInsert, onClose }) {
       { type: 'style', label: 'Style Block', sub: '<style>', cat: 'other', icon: <CodeIcon size={14} /> },
       { type: 'script', label: 'Script Block', sub: '<script>', cat: 'other', icon: <CodeIcon size={14} /> },
     ];
-    return [...comps, ...tags, ...other];
+    const effects = PRESETS.map((p) => ({
+      type: 'preset',
+      presetId: p.id,
+      label: p.label,
+      sub: p.hint,
+      cat: 'effects',
+      icon: <ElementComponentIcon size={14} style={{ color: '#ffcb05' }} />,
+    }));
+    return [...comps, ...tags, ...other, ...effects];
   }, [components]);
 
   const results = useMemo(() => {
