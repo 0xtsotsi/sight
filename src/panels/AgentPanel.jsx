@@ -139,12 +139,16 @@ function ToolTrace({ name, status, args, result, error, durationMs, children }) 
   );
 }
 
-function DiffCard({ diff, onApply, onReject, disabled }) {
+function DiffCard({ diff, onApply, onReject, disabled, streamId, conflicting }) {
+  // `conflicting` is true when two streams proposed changes on the same path —
+  // the user must pick which one to apply. Mirrors the M7 conflict policy.
   const [open, setOpen] = useState(false);
   return (
-    <div className={styles.diffCard}>
+    <div className={`${styles.diffCard} ${conflicting ? styles.diffCardConflict : ''}`} data-testid="diff-card" data-stream-id={streamId || ''} data-conflicting={conflicting ? 'true' : 'false'}>
       <div className={styles.diffHeader}>
         <strong>Proposed change</strong>
+        {streamId && <span className={styles.diffStream} data-testid="diff-stream">{streamId}</span>}
+        {conflicting && <span className={styles.diffConflictBadge} data-testid="diff-conflict">Conflicting</span>}
         <span className={styles.diffSummary}>{diff.summary}</span>
       </div>
       {diff.unifiedDiff && (
@@ -156,7 +160,7 @@ function DiffCard({ diff, onApply, onReject, disabled }) {
         <pre className={styles.diffBody}><code>{diff.unifiedDiff}</code></pre>
       )}
       <div className={styles.diffActions}>
-        <button className={styles.diffApply} disabled={disabled} onClick={() => onApply(diff)}>Apply</button>
+        <button className={styles.diffApply} disabled={disabled || conflicting} onClick={() => onApply(diff)}>Apply</button>
         <button className={styles.diffReject} disabled={disabled} onClick={() => onReject(diff)}>Reject</button>
       </div>
     </div>
@@ -225,6 +229,8 @@ function TurnBubble({ turn, onApply, onReject, disabled, onVisualDirectionChoose
                     onApply={onApply}
                     onReject={onReject}
                     disabled={disabled}
+                    streamId={e.streamId}
+                    conflicting={e.conflicting}
                   />
                 );
               case EVENT.RETRY:
