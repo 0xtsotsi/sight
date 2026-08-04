@@ -23,6 +23,32 @@ const VOID_ELEMENTS = new Set([
 ]);
 const RAW_ELEMENTS = new Set(['style', 'script']);
 
+// ---------------------------------------------------------------------------
+// Design-system token block emitter (M8).
+//
+// Given a design-system preset (name + tokens), produces a `<style>` block
+// that scopes the tokens to `:root[data-design-system="<name>"]`. The caller
+// is expected to inject this block into the page's `<head>` (or append it
+// to an existing `<style is:global>` block). The preset is read from
+// `.sight/design-systems.json` by the IPC handler in electron/main.js.
+//
+// The shape is intentionally simple: `:root { <token>: <value>; }` so the
+// eventual PostCSS layer / CSS variable resolver can interpret it without
+// ceremony. The preset name is validated against `/^[a-z0-9-]+$/` to
+// prevent CSS injection from surprising values.
+// ---------------------------------------------------------------------------
+
+export function emitDesignSystemTokens(name, tokens = {}) {
+  if (!name || !/^[a-z0-9-]+$/.test(name)) return '';
+  const safe = (v) => String(v).replace(/[\\\n\r;\{\}]/g, '');
+  const lines = Object.entries(tokens)
+    .filter(([k, v]) => typeof k === 'string' && /^--[a-z0-9-]+$/i.test(k))
+    .map(([k, v]) => `  ${k}: ${safe(v)};`)
+    .join('\n');
+  if (!lines) return '';
+  return `<style>:root[data-design-system="${name}"] {\n${lines}\n}</style>`;
+}
+
 // Built-in components that come from a virtual import (no .astro file on disk)
 // and so never appear in the page's IMPORT_RE matches. Treating them as
 // components instead of dynamic tags is what lets the props panel show their
