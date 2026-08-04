@@ -328,6 +328,15 @@ ipcMain.handle('agent:listBackgroundTasks', async (_e, { projectRoot } = {}) => 
   return { ok: true, tasks: listTasks(projectRoot) };
 });
 
+ipcMain.handle('agent:adoptBackgroundTask', async (_e, { projectRoot, taskId, action } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!taskId) return { ok: false, error: 'taskId is required' };
+  if (!['discard', 'merge', 'keep'].includes(action)) return { ok: false, error: 'invalid action' };
+  const { finalizeTask } = require('./worktreeShim.js');
+  const result = finalizeTask(projectRoot, taskId, action);
+  return { ok: true, ...result };
+});
+
 ipcMain.handle('agent:pruneBackgroundTasks', async (_e, { projectRoot } = {}) => {
   if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, removed: 0 };
   const { pruneStaleEntries } = require('./worktreeShim.js');
