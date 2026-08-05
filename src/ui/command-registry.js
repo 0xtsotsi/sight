@@ -391,19 +391,8 @@ export function buildRegistry(ctx) {
     },
   ];
 
-  // Stitch the final registry in canonical group order, preserving source order
-  // within each group. The cmdk filter keeps the array order for ties.
-  const ordered = [
-    ...entries,
-    ...fileEntries,
-    ...recentEntries,
-    ...nodeEntries,
-    ...aiEntries,
-    ...deployEntries,
-    ...dropEntries,
-  ];
-
-  // Drops (M9) — export the active page as a portable .drop.zip.
+  // Drops (M9) — export the active page as a portable .drop.zip. Declared
+  // before `ordered` so the TDZ is satisfied when the spread runs.
   const dropEntries = [
     {
       id: 'drop.share-frame',
@@ -414,6 +403,18 @@ export function buildRegistry(ctx) {
       isAvailable: () => !!project && !!page && typeof actions.exportFrame === 'function',
       perform: () => actions.exportFrame && actions.exportFrame(page),
     },
+  ];
+
+  // Stitch the final registry in canonical group order, preserving source order
+  // within each group. The cmdk filter keeps the array order for ties.
+  const ordered = [
+    ...entries,
+    ...fileEntries,
+    ...recentEntries,
+    ...nodeEntries,
+    ...aiEntries,
+    ...deployEntries,
+    ...dropEntries,
   ];
 
   // Pin the current ctx onto each entry so isAvailable can see it without
