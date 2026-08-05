@@ -20,10 +20,12 @@ import vm from 'node:vm';
 
 const parserSrc = fs.readFileSync(path.resolve('electron/astroParser.js'), 'utf8');
 // Pull out the emitDesignSystemTokens function and a small shim so we
-// can run it without the parser's larger dependencies.
-const match = parserSrc.match(/export function emitDesignSystemTokens[\s\S]+?\n\}\s*$/m);
+// can run it without the parser's larger dependencies. The function is
+// declared as `function emitDesignSystemTokens` (CommonJS-style) so we
+// match `function ` not `export function `.
+const match = parserSrc.match(/(?:^|\n)function emitDesignSystemTokens[\s\S]+?\n\}\s*$/m);
 if (!match) throw new Error('Could not extract emitDesignSystemTokens from astroParser.js');
-const code = `module.exports = { emitDesignSystemTokens: ${match[0].replace(/^export\s+/, '')} };`;
+const code = `module.exports = { emitDesignSystemTokens: ${match[0]} };`;
 const sandbox = { module: { exports: {} } };
 const ctx = vm.createContext(sandbox);
 vm.runInContext(code, ctx);

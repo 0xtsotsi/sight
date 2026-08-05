@@ -38,7 +38,7 @@ const RAW_ELEMENTS = new Set(['style', 'script']);
 // prevent CSS injection from surprising values.
 // ---------------------------------------------------------------------------
 
-export function emitDesignSystemTokens(name, tokens = {}) {
+function emitDesignSystemTokens(name, tokens = {}) {
   if (!name || !/^[a-z0-9-]+$/.test(name)) return '';
   const safe = (v) => String(v).replace(/[\\\n\r;\{\}]/g, '');
   const lines = Object.entries(tokens)
@@ -1096,4 +1096,5 @@ module.exports = {
 
   hasRecognizedObjectKey,
   RECOGNIZED_FRONTMATTER_OBJECTS,
+  emitDesignSystemTokens,
 };
