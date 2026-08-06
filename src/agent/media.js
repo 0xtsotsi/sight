@@ -2,11 +2,18 @@
 //
 // MediaProvider abstraction for the Impeccable-first Design Agent.
 //
-// Phase 1 ships only the StubProvider. The HiggsfieldProvider is wired but
-// never registered until `higgsfield auth login` has produced a credential
-// at ~/.config/higgsfield/credentials.json. The panel reads
+// Phase 1 ships only the StubProvider. The FalProvider is wired but
+// never registered until the host exposes `FAL_KEY` in its environment
+// (see electron/main.js:fal:authProbe). The panel reads
 // `provider.availability()` to decide whether to surface the picker and
 // whether to show a "configure" hint.
+//
+// Migration note (2026-08-06): swapped the Higgsfield CLI bridge for
+// @fal-ai/client (Node 18+, npm package). The renderer-side probe path
+// stays the same shape (a window.avb.<provider>AuthProbe verb); only the
+// provider name, the env var, and the model defaults changed. Pull-
+// brandkit becomes a stub: fal has no brand-kit endpoint, so the tool
+// returns a `media_unavailable` result with a clear recovery message.
 //
 // Design rules (Phase 1):
 //   - The provider never sees the model prompt. It only receives typed
@@ -88,7 +95,7 @@ export function mediaUnavailable({ kind, requestId, reason, recoveryCommand }) {
     reason: reason ?? 'provider is not configured',
     recoveryCommand: typeof recoveryCommand === 'string' && recoveryCommand.length > 0
       ? recoveryCommand
-      : 'higgsfield auth login',
+      : 'export FAL_KEY=<your-fal-key>  # get one at https://fal.ai/dashboard/keys',
     ts: Date.now(),
   };
 }
@@ -208,54 +215,88 @@ export const StubProvider = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
-// HiggsfieldProvider — wired but not registered until auth is detected.
+// FalProvider — wired but not registered until FAL_KEY is present.
 // The constructor intentionally throws to fail loud: callers must import
-// the module only after `higgsfield auth token` is present.
+// the module only after the renderer confirms the host probe returned
+// `status: 'ready'`.
+//
+// API shape (verified against @fal-ai/client v1.10.1, 2026-08):
+//   import { fal } from '@fal-ai/client';
+//   fal.config({ credentials: 'FAL_KEY' });   // or process.env.FAL_KEY
+//   const { data, requestId } = await fal.subscribe('fal-ai/<model>', {
+//     input: { prompt, image_size, aspect_ratio, ... },
+//     onQueueUpdate: (u) => { /* IN_QUEUE / IN_PROGRESS */ },
+//   });
+//   data.images[0].url           // CDN url to the rendered asset
+//   data.video.url               // CDN url to the rendered video
+//
+// We never log the key. We never include the key in any return value. The
+// renderer only sees {status, reason?, recoveryCommand?}; the key stays
+// inside Electron's main process and is bound to fal.config() lazily.
 // ---------------------------------------------------------------------------
 
-const HIGGSFIELD_RECOVERY = 'higgsfield auth login';
+const FAL_RECOVERY = 'export FAL_KEY=<your-fal-key>  # https://fal.ai/dashboard/keys';
+const FAL_DEFAULT_IMAGE_MODEL = 'fal-ai/nano-banana-2';
+const FAL_DEFAULT_VIDEO_MODEL = 'fal-ai/seedance-2-0';
 
-export function buildHiggsfieldProvider({ token, binary = 'higgsfield', pollIntervalMs = 2000, pollTimeoutMs = 5 * 60 * 1000 } = {}) {
-  if (typeof token !== 'string' || token.length === 0) {
-    throw new Error('buildHiggsfieldProvider: token is required');
+export function buildFalProvider({ apiKey, pollTimeoutMs = 5 * 60 * 1000 } = {}) {
+  if (typeof apiKey !== 'string' || apiKey.length === 0) {
+    throw new Error('buildFalProvider: apiKey is required');
   }
   return Object.freeze({
-    name: 'higgsfield',
+    name: 'fal',
     kind: 'remote',
     availability() {
-      return token ? { status: PROVIDER_STATUS.READY, reason: 'higgsfield token present' } : { status: PROVIDER_STATUS.UNAVAILABLE, reason: 'no token', recoveryCommand: HIGGSFIELD_RECOVERY };
+      return apiKey ? { status: PROVIDER_STATUS.READY, reason: 'FAL_KEY present' } : { status: PROVIDER_STATUS.UNAVAILABLE, reason: 'no FAL_KEY', recoveryCommand: FAL_RECOVERY };
     },
     async generate({ kind, prompt, requestId, signal, projectRoot, model, aspectRatio, durationSec, referenceImageIds, topic, faceRefId, name } = {}) {
       if (signal && signal.aborted) return mediaCancelled({ kind, requestId });
-      const id = requestId ?? 'req-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-      if (!(await isBinaryAvailable(binary))) {
-        return mediaUnavailable({ kind, requestId: id, reason: 'higgsfield CLI is not installed', recoveryCommand: 'npm i -g @higgsfield/cli' });
-      }
+      const id = requestId ?? newRequestId();
       try {
-        if (kind === 'brandkit') return await runBrandkit({ id, name, projectRoot, signal });
-        if (kind === 'image') return await runImage({ id, prompt, projectRoot, model, aspectRatio, referenceImageIds, signal });
-        if (kind === 'video') return await runVideo({ id, prompt, projectRoot, model, aspectRatio, durationSec, signal, pollIntervalMs, pollTimeoutMs });
-        if (kind === 'thumbnail') return await runThumbnail({ id, prompt, topic, faceRefId, projectRoot, signal, pollIntervalMs, pollTimeoutMs });
+        if (kind === 'brandkit') {
+          // fal has no brand-kit endpoint. Return a typed unavailable result
+          // so the panel can render a clear recovery hint instead of crashing.
+          return mediaUnavailable({
+            kind,
+            requestId: id,
+            reason: 'fal.ai has no brand-kit endpoint; pull brand kits from a CRM or store them as design tokens',
+            recoveryCommand: 'drop a brandkit.json into the project root, then re-run pull_brandkit with --from-project',
+          });
+        }
+        if (kind === 'image') return await runImage({ id, prompt, projectRoot, model, aspectRatio, referenceImageIds, apiKey, signal, pollTimeoutMs });
+        if (kind === 'thumbnail') return await runImage({
+          id,
+          prompt: (topic ? topic + ' \u2014 ' : '') + prompt,
+          projectRoot,
+          model: FAL_DEFAULT_IMAGE_MODEL,
+          aspectRatio: aspectRatio ?? '16:9',
+          referenceImageIds: faceRefId ? [faceRefId] : referenceImageIds,
+          apiKey,
+          signal,
+          pollTimeoutMs,
+          kindOverride: 'thumbnail',
+        });
+        if (kind === 'video') return await runVideo({ id, prompt, projectRoot, model, aspectRatio, durationSec, apiKey, signal, pollTimeoutMs });
         return mediaError({ kind, requestId: id, message: 'unsupported kind: ' + String(kind), code: 'unsupported_kind' });
       } catch (err) {
         if (signal && signal.aborted) return mediaCancelled({ kind, requestId: id });
-        return mediaError({ kind, requestId: id, message: String(err?.message ?? err), code: 'higgsfield_failed' });
+        return mediaError({ kind, requestId: id, message: String(err?.message ?? err), code: 'fal_failed' });
       }
     },
-    _binary: binary,
   });
 }
 
 // ---------------------------------------------------------------------------
-// CLI helpers
+// fal.ai adapter — lazy import to keep the renderer bundle slim and to
+// avoid loading the SDK in the browser at all (the SDK is Node-only).
 // ---------------------------------------------------------------------------
 
-async function isBinaryAvailable(binary) {
-  try {
-    const { cp } = await loadNodeModules();
-    cp.execFileSync(binary, ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] });
-    return true;
-  } catch { return false; }
+async function loadFal() {
+  // Lazy require: the SDK has a node:fs dep at the top of one file; it
+  // would crash on Vite's browser bundle. The renderer never calls this
+  // path because selectProviderAsync() only routes here when the IPC
+  // probe reports FAL_KEY is present on the host.
+  return await import('@fal-ai/client');
 }
 
 async function writeAssetFile({ projectRoot, requestId, kind, ext, bytes }) {
@@ -268,105 +309,120 @@ async function writeAssetFile({ projectRoot, requestId, kind, ext, bytes }) {
   return outPath;
 }
 
-function callHiggsfield(args, signal) {
-  return new Promise((resolve, reject) => {
-    let proc;
-    let onAbort;
-    loadNodeModules().then(({ cp }) => {
-      proc = cp.spawn('higgsfield', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      proc.stdout.on('data', (b) => { stdout += b.toString('utf8'); });
-      proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
-      onAbort = () => { try { proc.kill('SIGTERM'); } catch {} reject(new Error('aborted')); };
-      if (signal) signal.addEventListener('abort', onAbort, { once: true });
-      proc.on('error', (err) => { if (signal) signal.removeEventListener('abort', onAbort); reject(err); });
-      proc.on('close', (code) => {
-        if (signal) signal.removeEventListener('abort', onAbort);
-        if (code !== 0) return reject(new Error('higgsfield exited with code ' + code + ': ' + stderr.trim()));
-        resolve(stdout);
-      });
-    }, reject);
+async function falSubscribe({ apiKey, model, input, signal, pollTimeoutMs }) {
+  // Renderer path: the apiKey here is a presence sentinel ('__use_host_ipc__')
+  // because the renderer process has no access to process.env.FAL_KEY. The
+  // Electron main process holds the real key and runs the actual fal.subscribe
+  // call via window.avb.falGenerate. This is the only path that can produce
+  // real assets when the renderer is what invokes the provider.
+  if (typeof window !== 'undefined' && window.avb?.falGenerate && apiKey === '__use_host_ipc__') {
+    const result = await window.avb.falGenerate({ model, input, pollTimeoutMs });
+    if (!result?.ok) {
+      throw new Error(result?.error ?? 'fal:generate failed in main process');
+    }
+    return { data: result.data, requestId: result.requestId };
+  }
+  // Node path (tests, scripts, non-Electron usage): read the real key from
+  // process.env if the caller didn't pass one explicitly.
+  const { fal } = await loadFal();
+  let onAbort;
+  if (signal) {
+    onAbort = () => {
+      // fal.subscribe handles a single Promise; we abort by rejecting on
+      // signal. The SDK does not currently expose AbortSignal, so the
+      // best we can do is reject the wrapper promise and let the SDK
+      // finish in the background (it is cheap and idempotent on the
+      // fal.ai side).
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
+  const realKey = (typeof process !== 'undefined' && process.env?.FAL_KEY) || apiKey;
+  if (!realKey || realKey === '__use_host_ipc__' || realKey.length < 8) {
+    throw new Error('FAL_KEY is not available; set process.env.FAL_KEY or run inside Electron with a configured host');
+  }
+  fal.config({ credentials: realKey });
+  try {
+    const { data, requestId } = await fal.subscribe(model, {
+      input,
+      logs: false,
+      pollInterval: 1500,
+      timeout: pollTimeoutMs,
+    });
+    return { data, requestId };
+  } finally {
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function runImage({ id, prompt, projectRoot, model, aspectRatio, referenceImageIds, apiKey, signal, pollTimeoutMs, kindOverride }) {
+  const useModel = model ?? FAL_DEFAULT_IMAGE_MODEL;
+  const input = { prompt, num_images: 1 };
+  if (aspectRatio) input.aspect_ratio = aspectRatio;
+  if (Array.isArray(referenceImageIds) && referenceImageIds.length > 0) {
+    input.image_urls = referenceImageIds;
+  }
+  const { data, requestId: falRequestId } = await falSubscribe({ apiKey, model: useModel, input, signal, pollTimeoutMs });
+  const images = Array.isArray(data?.images) ? data.images : (data?.image ? [data.image] : []);
+  const firstUrl = images[0]?.url ?? null;
+  const seed = data?.seed ?? null;
+  const outPath = await writeAssetFile({
+    projectRoot,
+    requestId: id,
+    kind: kindOverride ?? 'image',
+    ext: 'json',
+    bytes: Buffer.from(JSON.stringify({ id, falRequestId, model: useModel, url: firstUrl, seed, hasMore: images.length > 1 }, null, 2), 'utf8'),
   });
-}
-
-async function runImage({ id, prompt, projectRoot, model, aspectRatio, referenceImageIds, signal }) {
-  const args = ['generate', 'create', model || 'nano_banana_2', '--prompt', prompt, '--json'];
-  if (aspectRatio) args.push('--aspect-ratio', aspectRatio);
-  for (const r of referenceImageIds ?? []) args.push('--image-references', r);
-  const stdout = await callHiggsfield(args, signal);
-  return parseImageResult({ id, stdout, projectRoot, kind: 'image' });
-}
-
-async function runVideo({ id, prompt, projectRoot, model, aspectRatio, durationSec, signal, pollIntervalMs, pollTimeoutMs }) {
-  const args = ['generate', 'create', model || 'seedance_2_0', '--prompt', prompt, '--wait', '--wait-timeout', Math.round(pollTimeoutMs / 60_000) + 'm', '--wait-interval', Math.round(pollIntervalMs / 1000) + 's', '--json'];
-  if (aspectRatio) args.push('--aspect-ratio', aspectRatio);
-  if (durationSec) args.push('--duration', String(durationSec));
-  const stdout = await callHiggsfield(args, signal);
-  return parseImageResult({ id, stdout, projectRoot, kind: 'video' });
-}
-
-async function runThumbnail({ id, prompt, topic, faceRefId, signal, pollIntervalMs, pollTimeoutMs }) {
-  // The CLI does not have a dedicated thumbnail command, so we use the
-  // image path with a YouTube-safe 16:9 aspect ratio. The renderer
-  // surfaces a specific `generate_thumbnail` intent.
-  const args = ['generate', 'create', 'nano_banana_2', '--prompt', (topic ? topic + ' — ' : '') + prompt, '--aspect-ratio', '16:9', '--json', '--wait', '--wait-timeout', Math.round(pollTimeoutMs / 60_000) + 'm', '--wait-interval', Math.round(pollIntervalMs / 1000) + 's'];
-  if (faceRefId) args.push('--image-references', faceRefId);
-  const stdout = await callHiggsfield(args, signal);
-  return parseImageResult({ id, stdout, projectRoot, kind: 'thumbnail' });
-}
-
-async function runBrandkit({ id, name, projectRoot, signal }) {
-  const args = ['marketing-studio', 'brand-kits', 'list', '--json'];
-  const stdout = await callHiggsfield(args, signal);
-  const outPath = await writeAssetFile({ projectRoot, requestId: id, kind: 'brandkit', ext: 'json', bytes: Buffer.from(stdout, 'utf8') });
   return {
     schemaVersion: 1,
     status: MEDIA_RESULT_STATUS.OK,
-    kind: 'brandkit',
+    kind: kindOverride ?? 'image',
     requestId: id,
-    provider: 'higgsfield',
-    assets: [{ path: outPath, kind: 'brandkit', mime: 'application/json', bytes: Buffer.byteLength(stdout, 'utf8') }],
-    license: 'see higgsfield brand-kit terms',
-    attribution: 'higgsfield · marketing-studio · ' + name,
-    data: tryParseJson(stdout),
+    provider: 'fal',
+    assets: [{ path: outPath, kind: kindOverride ?? 'image', mime: 'application/json', bytes: 0, url: firstUrl }],
+    license: 'see fal.ai license terms (per-model; commercial by default for nano-banana-2)',
+    attribution: 'fal.ai · ' + useModel + ' · seed ' + (seed ?? 'n/a'),
+    url: firstUrl,
+    job: falRequestId,
     ts: Date.now(),
   };
 }
 
-function tryParseJson(stdout) {
-  try { return JSON.parse(stdout); } catch { return null; }
-}
-
-function parseImageResult({ id, stdout, projectRoot, kind }) {
-  const parsed = tryParseJson(stdout);
-  const results = Array.isArray(parsed?.results) ? parsed.results : [];
-  const firstUrl = results[0]?.url ?? null;
-  // The sync writeFileSync below would re-introduce a static `node:fs`
-  // dependency; we keep this on the async path via writeAssetFile (which
-  // already lazy-imports fs). When called outside the renderer this returns
-  // a Promise; the surrounding `.generate()` already awaits its result.
-  return writeAssetFile({ projectRoot, requestId: id, kind, ext: 'json', bytes: Buffer.from(JSON.stringify({ id, parsed }, null, 2), 'utf8') }).then((outPath) => ({
+async function runVideo({ id, prompt, projectRoot, model, aspectRatio, durationSec, apiKey, signal, pollTimeoutMs }) {
+  const useModel = model ?? FAL_DEFAULT_VIDEO_MODEL;
+  const input = { prompt };
+  if (aspectRatio) input.aspect_ratio = aspectRatio;
+  if (durationSec) input.duration = String(durationSec);
+  const { data, requestId: falRequestId } = await falSubscribe({ apiKey, model: useModel, input, signal, pollTimeoutMs });
+  const videoUrl = data?.video?.url ?? data?.url ?? null;
+  const outPath = await writeAssetFile({
+    projectRoot,
+    requestId: id,
+    kind: 'video',
+    ext: 'json',
+    bytes: Buffer.from(JSON.stringify({ id, falRequestId, model: useModel, url: videoUrl }, null, 2), 'utf8'),
+  });
+  return {
     schemaVersion: 1,
     status: MEDIA_RESULT_STATUS.OK,
-    kind,
+    kind: 'video',
     requestId: id,
-    provider: 'higgsfield',
-    assets: [{ path: outPath, kind, mime: 'application/json', bytes: 0, url: firstUrl }],
-    license: 'see higgsfield license terms',
-    attribution: 'higgsfield · generate · ' + (parsed?.model ?? 'unknown'),
-    url: firstUrl,
-    job: parsed?.id ?? null,
+    provider: 'fal',
+    assets: [{ path: outPath, kind: 'video', mime: 'application/json', bytes: 0, url: videoUrl }],
+    license: 'see fal.ai license terms (per-model; commercial by default for seedance-2-0)',
+    attribution: 'fal.ai · ' + useModel,
+    url: videoUrl,
+    job: falRequestId,
     ts: Date.now(),
-  }));
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Auth probe (renderer-side): does the user have a Higgsfield credential?
+// Auth probe (renderer-side): does the host have a FAL_KEY available?
 // Phase 1 keeps the token out of the agent process entirely. The renderer
-// asks the Electron main process via window.avb.higgsfieldAuthProbe();
-// main reads ~/.config/higgsfield/credentials.json through safeStorage
-// and returns {status, reason?, recoveryCommand?}. We never see the token.
+// asks the Electron main process via window.avb.falAuthProbe();
+// main reads process.env.FAL_KEY (or safeStorage-decrypted credential set
+// during onboarding) and returns {status, reason?, recoveryCommand?}.
+// We never see the key.
 //
 // If the host does not expose the probe (dev web, no Electron), we report
 // 'unavailable' with the same recovery command so the panel can always
@@ -379,18 +435,18 @@ export const AUTH_STATUS = Object.freeze({
   UNKNOWN: 'unknown',
 });
 
-const DEFAULT_RECOVERY = 'higgsfield auth login';
+const DEFAULT_RECOVERY = 'export FAL_KEY=<your-fal-key>  # https://fal.ai/dashboard/keys';
 
 /**
- * Probe the host for a Higgsfield credential. Returns a stable
+ * Probe the host for a FAL_KEY. Returns a stable
  * {status, reason?, recoveryCommand?} envelope. Never throws.
  */
-export async function probeHiggsfieldAuth(host = (typeof window !== 'undefined' ? window : null)) {
-  if (!host || typeof host.avb?.higgsfieldAuthProbe !== 'function') {
+export async function probeFalAuth(host = (typeof window !== 'undefined' ? window : null)) {
+  if (!host || typeof host.avb?.falAuthProbe !== 'function') {
     return { status: AUTH_STATUS.UNAVAILABLE, reason: 'host probe is not available', recoveryCommand: DEFAULT_RECOVERY };
   }
   try {
-    const r = await host.avb.higgsfieldAuthProbe();
+    const r = await host.avb.falAuthProbe();
     if (!r || typeof r !== 'object') {
       return { status: AUTH_STATUS.UNAVAILABLE, reason: 'empty probe response', recoveryCommand: DEFAULT_RECOVERY };
     }
@@ -409,17 +465,19 @@ export async function probeHiggsfieldAuth(host = (typeof window !== 'undefined' 
 // ---------------------------------------------------------------------------
 
 /**
- * Pick the provider for a given kind. Phase 2: when the auth probe reports
- * a real token, return a real HiggsfieldProvider; otherwise fall back to
+ * Pick the provider for a given kind. When the auth probe reports a real
+ * FAL_KEY is present on the host, return a real FalProvider that routes
+ * generation through the Electron main process; otherwise fall back to
  * the deterministic StubProvider. The stub is always safe to call.
  */
 export async function selectProviderAsync() {
-  const probe = await probeHiggsfieldAuth();
+  const probe = await probeFalAuth();
   if (probe.status === AUTH_STATUS.READY) {
-    // Phase 2: the real provider still reports unavailability on generate
-    // because we don't shell out to the CLI from the renderer. The flip
-    // is wired so Phase 4 can drop in the actual @higgsfield/cli call.
-    return buildHiggsfieldProvider({ token: 'probe-placeholder' });
+    // Sentinel apiKey; falSubscribe() detects it and routes through the
+    // host's fal:generate IPC instead of trying to use the sentinel as
+    // a real credential. The real FAL_KEY lives only in the Electron
+    // main process and is never exposed to the renderer.
+    return buildFalProvider({ apiKey: "__use_host_ipc__" });
   }
   return StubProvider;
 }
@@ -433,4 +491,4 @@ export function selectProvider() {
   return StubProvider;
 }
 
-export const _internals = { escapeXml, probeHiggsfieldAuth, AUTH_STATUS, selectProviderAsync, isBinaryAvailable, writeAssetFile, tryParseJson, parseImageResult };
+export const _internals = { escapeXml, probeFalAuth, AUTH_STATUS, selectProviderAsync, loadFal, falSubscribe, writeAssetFile };

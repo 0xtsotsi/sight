@@ -238,50 +238,76 @@ ipcMain.handle('native:paste', () => {
 ipcMain.handle('agent:getCredential', async () => agentCredential.getCredential());
 
 // ---------------------------------------------------------------------------
-// Phase 2: Higgsfield credential probe.
+// 2026-08-06: FAL_KEY credential probe (replaces Higgsfield probe).
 //
-// Renderer never sees the raw token. We open the file, try to decrypt it
-// with safeStorage (so the value is on disk in encrypted form), and report
-// only a stable {status, reason?, recoveryCommand?} envelope. If the user
-// has not run `higgsfield auth login`, the file is missing or malformed
-// and we report UNAVAILABLE with the exact one-line recovery command.
+// Renderer never sees the raw key. We read process.env.FAL_KEY and report
+// only a stable {status, reason?, recoveryCommand?} envelope. If FAL_KEY
+// is unset, the renderer gets UNAVAILABLE with the exact one-line recovery
+// command. The key value is NEVER returned across the IPC boundary.
 //
-// safeStorage may be unavailable on some Linux distros; in that case we
-// still report UNAVAILABLE but the reason points the user at the docs.
+// Onboarding path: operator runs `export FAL_KEY=<key>` in their shell
+// before launching Sight, OR drops the key into ~/.config/sight/fal.key
+// (mode 0600) and Sight picks it up at probe time.
 // ---------------------------------------------------------------------------
 
-const HIGGSFIELD_CRED_PATH = path.join(os.homedir(), '.config', 'higgsfield', 'credentials.json');
-const HIGGSFIELD_RECOVERY = 'higgsfield auth login';
+const FAL_ENV_VAR = 'FAL_KEY';
+const FAL_FILE_PATH = path.join(os.homedir(), '.config', 'sight', 'fal.key');
+const FAL_RECOVERY = 'export FAL_KEY=<your-fal-key>  # https://fal.ai/dashboard/keys';
 
-ipcMain.handle('higgsfield:authProbe', async () => {
-  if (typeof safeStorage === 'undefined' || !safeStorage.isEncryptionAvailable?.()) {
-    return { status: 'unavailable', reason: 'safeStorage is not available on this host', recoveryCommand: HIGGSFIELD_RECOVERY };
-  }
-  let raw;
-  try {
-    raw = await fs.readFile(HIGGSFIELD_CRED_PATH, 'utf8');
-  } catch (err) {
-    if (err && err.code === 'ENOENT') {
-      return { status: 'unavailable', reason: 'no credential file at ~/.config/higgsfield/credentials.json', recoveryCommand: HIGGSFIELD_RECOVERY };
+ipcMain.handle('fal:authProbe', async () => {
+  let key = process.env[FAL_ENV_VAR];
+  if (!key || typeof key !== 'string' || key.length === 0) {
+    // Fallback: read from a host-local file the operator maintains.
+    // Same key-isolation rules as the env-var path: presence-only here.
+    try {
+      key = (await fs.readFile(FAL_FILE_PATH, 'utf8')).trim();
+    } catch {
+      return { status: 'unavailable', reason: 'FAL_KEY is not set in env or ~/.config/sight/fal.key', recoveryCommand: FAL_RECOVERY };
     }
-    return { status: 'unavailable', reason: 'cannot read credential file: ' + (err?.message ?? String(err)), recoveryCommand: HIGGSFIELD_RECOVERY };
   }
-  let parsed;
+  if (!key || key.length < 8) {
+    return { status: 'unavailable', reason: 'FAL_KEY value looks malformed (expected >= 8 chars)', recoveryCommand: FAL_RECOVERY };
+  }
+  return { status: 'ready', reason: 'FAL_KEY present' };
+});
+
+// ---------------------------------------------------------------------------
+// 2026-08-06: FAL_KEY generation handler. The renderer never sees the real
+// key — it submits a typed generation envelope via IPC, the main process
+// uses the host-side FAL_KEY to call fal.subscribe, and returns the
+// response envelope back. This is the only path that can produce real
+// assets in the renderer flow.
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('fal:generate', async (_e, { model, input, pollTimeoutMs } = {}) => {
+  if (!model || typeof model !== 'string') {
+    return { ok: false, error: 'model is required' };
+  }
+  const envKey = process.env[FAL_ENV_VAR];
+  let realKey = (typeof envKey === 'string' && envKey.length > 0) ? envKey : null;
+  if (!realKey) {
+    try {
+      realKey = (await fs.readFile(FAL_FILE_PATH, 'utf8')).trim();
+    } catch {
+      return { ok: false, error: 'FAL_KEY is not configured on host', recoveryCommand: FAL_RECOVERY };
+    }
+  }
+  if (!realKey || realKey.length < 8) {
+    return { ok: false, error: 'FAL_KEY is malformed' };
+  }
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { status: 'unavailable', reason: 'credential file is not valid JSON', recoveryCommand: HIGGSFIELD_RECOVERY };
+    const mod = await import('@fal-ai/client');
+    mod.fal.config({ credentials: realKey });
+    const { data, requestId } = await mod.fal.subscribe(model, {
+      input: input ?? {},
+      logs: false,
+      pollInterval: 1500,
+      timeout: typeof pollTimeoutMs === 'number' ? pollTimeoutMs : 5 * 60 * 1000,
+    });
+    return { ok: true, data, requestId };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
   }
-  // Phase 2 reads the credential file as plain JSON. The token is checked
-  // for presence only — it is NEVER returned across the IPC boundary. If
-  // Phase 4 introduces safeStorage-encrypted at-rest credentials, swap
-  // this for safeStorage.decryptString(raw) before JSON.parse and gate
-  // on safeStorage.isEncryptionAvailable() above.
-  const token = typeof parsed.token === 'string' ? parsed.token : (typeof parsed.access_token === 'string' ? parsed.access_token : null);
-  if (!token || token.length === 0) {
-    return { status: 'unavailable', reason: 'credential file has no token field', recoveryCommand: HIGGSFIELD_RECOVERY };
-  }
-  return { status: 'ready', reason: 'token present' };
 });
 
 // ---------------------------------------------------------------------------
