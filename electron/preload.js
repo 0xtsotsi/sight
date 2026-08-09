@@ -833,6 +833,7 @@ contextBridge.exposeInMainWorld('avb', {
   agentFinalizeTask: invoke('agent:finalizeTask'),
   agentListBackgroundTasks: invoke('agent:listBackgroundTasks'),
   agentPruneBackgroundTasks: invoke('agent:pruneBackgroundTasks'),
+  exportFrame: invoke('agent:exportFrame'),
   // AI inline-edit. Renderer never sees the API key value — `aiSetKey`
   // sends it to main once and main stores it in safeStorage. Subsequent
   // calls return only booleans / provider metadata.
