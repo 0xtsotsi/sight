@@ -22,10 +22,29 @@
 // `generate_video`, `generate_thumbnail`, and `pull_brandkit` as proposals
 // (Phase 2 will move them onto the typed contract below).
 
-import { randomUUID } from 'node:crypto';
-import path from 'node:path';
-import { mkdirSync, writeFileSync, realpathSync } from 'node:fs';
-import { execFileSync, spawn } from 'node:child_process';
+// Stays portable across Node (main process) and the browser (renderer). Vite's
+// browser-external shim does not shim `node:crypto`'s named exports, and the
+// Node-only modules (`node:fs`, `node:child_process`) cannot run in the browser
+// at all — so we keep all Node-side I/O behind dynamic imports, and requestIds
+// are generated via the global crypto object with a Math.random/Date fallback.
+function newRequestId() {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return 'req-' + globalThis.crypto.randomUUID();
+  }
+  return 'req-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+// Node-only helpers. Loaded lazily inside the provider implementations;
+// the renderer registers providers but never invokes them, so the imports
+// never fire in the browser bundle.
+async function loadNodeModules() {
+  const [path, fs, cp] = await Promise.all([
+    import('node:path'),
+    import('node:fs'),
+    import('node:child_process'),
+  ]);
+  return { path, fs, cp };
+}
 
 // ---------------------------------------------------------------------------
 // Typed enums
@@ -65,7 +84,7 @@ export function mediaUnavailable({ kind, requestId, reason, recoveryCommand }) {
     schemaVersion: 1,
     status: MEDIA_RESULT_STATUS.UNAVAILABLE,
     kind,
-    requestId: requestId ?? 'req-' + randomUUID(),
+    requestId: requestId ?? newRequestId(),
     reason: reason ?? 'provider is not configured',
     recoveryCommand: typeof recoveryCommand === 'string' && recoveryCommand.length > 0
       ? recoveryCommand
@@ -79,7 +98,7 @@ export function mediaError({ kind, requestId, message, code }) {
     schemaVersion: 1,
     status: MEDIA_RESULT_STATUS.ERROR,
     kind,
-    requestId: requestId ?? 'req-' + randomUUID(),
+    requestId: requestId ?? newRequestId(),
     error: { code: code ?? 'unknown', message: String(message ?? 'unknown error') },
     ts: Date.now(),
   };
@@ -90,7 +109,7 @@ export function mediaCancelled({ kind, requestId }) {
     schemaVersion: 1,
     status: MEDIA_RESULT_STATUS.CANCELLED,
     kind,
-    requestId: requestId ?? 'req-' + randomUUID(),
+    requestId: requestId ?? newRequestId(),
     ts: Date.now(),
   };
 }
@@ -154,26 +173,24 @@ export const StubProvider = Object.freeze({
   },
   async generate({ kind, prompt, requestId, signal, projectRoot } = {}) {
     if (signal && signal.aborted) return mediaCancelled({ kind, requestId });
-    const id = requestId ?? 'req-' + randomUUID();
+    const id = requestId ?? newRequestId();
     const svg = buildStubSvg({ kind, prompt, requestId: id });
-    const dir = path.join(projectRoot ?? process.cwd(), '.sight', 'media', id);
+    let outPath = id + '.svg';
     try {
-      mkdirSync(dir, { recursive: true });
+      const { path, fs } = await loadNodeModules();
+      const dir = path.join(projectRoot ?? process.cwd(), '.sight', 'media', id);
+      fs.mkdirSync(dir, { recursive: true });
+      const filename = kind === MEDIA_KIND.VIDEO
+        ? 'storyboard.svg'
+        : kind === MEDIA_KIND.THUMBNAIL
+          ? 'thumbnail.svg'
+          : kind === MEDIA_KIND.BRANDKIT
+            ? 'brandkit.svg'
+            : 'image.svg';
+      outPath = path.join(dir, filename);
+      fs.writeFileSync(outPath, svg, 'utf8');
     } catch {
       // best-effort — we still return the SVG inline as a fallback
-    }
-    const filename = kind === MEDIA_KIND.VIDEO
-      ? 'storyboard.svg'
-      : kind === MEDIA_KIND.THUMBNAIL
-        ? 'thumbnail.svg'
-        : kind === MEDIA_KIND.BRANDKIT
-          ? 'brandkit.svg'
-          : 'image.svg';
-    const outPath = path.join(dir, filename);
-    try {
-      writeFileSync(outPath, svg, 'utf8');
-    } catch {
-      // best-effort
     }
     return {
       schemaVersion: 1,
@@ -211,7 +228,7 @@ export function buildHiggsfieldProvider({ token, binary = 'higgsfield', pollInte
     async generate({ kind, prompt, requestId, signal, projectRoot, model, aspectRatio, durationSec, referenceImageIds, topic, faceRefId, name } = {}) {
       if (signal && signal.aborted) return mediaCancelled({ kind, requestId });
       const id = requestId ?? 'req-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-      if (!isBinaryAvailable(binary)) {
+      if (!(await isBinaryAvailable(binary))) {
         return mediaUnavailable({ kind, requestId: id, reason: 'higgsfield CLI is not installed', recoveryCommand: 'npm i -g @higgsfield/cli' });
       }
       try {
@@ -233,37 +250,43 @@ export function buildHiggsfieldProvider({ token, binary = 'higgsfield', pollInte
 // CLI helpers
 // ---------------------------------------------------------------------------
 
-function isBinaryAvailable(binary) {
+async function isBinaryAvailable(binary) {
   try {
-    execFileSync(binary, ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    const { cp } = await loadNodeModules();
+    cp.execFileSync(binary, ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] });
     return true;
   } catch { return false; }
 }
 
-function writeAssetFile({ projectRoot, requestId, kind, ext, bytes }) {
+async function writeAssetFile({ projectRoot, requestId, kind, ext, bytes }) {
+  const { path, fs } = await loadNodeModules();
   const dir = path.join(projectRoot ?? process.cwd(), '.sight', 'media', requestId);
-  mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
   const filename = kind === 'video' ? 'video.' + ext : kind === 'thumbnail' ? 'thumbnail.' + ext : kind === 'brandkit' ? 'brandkit.json' : 'image.' + ext;
   const outPath = path.join(dir, filename);
-  writeFileSync(outPath, bytes);
+  fs.writeFileSync(outPath, bytes);
   return outPath;
 }
 
 function callHiggsfield(args, signal) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('higgsfield', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (b) => { stdout += b.toString('utf8'); });
-    proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
-    const onAbort = () => { try { proc.kill('SIGTERM'); } catch {} reject(new Error('aborted')); };
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    proc.on('error', (err) => { if (signal) signal.removeEventListener('abort', onAbort); reject(err); });
-    proc.on('close', (code) => {
-      if (signal) signal.removeEventListener('abort', onAbort);
-      if (code !== 0) return reject(new Error('higgsfield exited with code ' + code + ': ' + stderr.trim()));
-      resolve(stdout);
-    });
+    let proc;
+    let onAbort;
+    loadNodeModules().then(({ cp }) => {
+      proc = cp.spawn('higgsfield', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      proc.stdout.on('data', (b) => { stdout += b.toString('utf8'); });
+      proc.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
+      onAbort = () => { try { proc.kill('SIGTERM'); } catch {} reject(new Error('aborted')); };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      proc.on('error', (err) => { if (signal) signal.removeEventListener('abort', onAbort); reject(err); });
+      proc.on('close', (code) => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+        if (code !== 0) return reject(new Error('higgsfield exited with code ' + code + ': ' + stderr.trim()));
+        resolve(stdout);
+      });
+    }, reject);
   });
 }
 
@@ -296,7 +319,7 @@ async function runThumbnail({ id, prompt, topic, faceRefId, signal, pollInterval
 async function runBrandkit({ id, name, projectRoot, signal }) {
   const args = ['marketing-studio', 'brand-kits', 'list', '--json'];
   const stdout = await callHiggsfield(args, signal);
-  const outPath = writeAssetFile({ projectRoot, requestId: id, kind: 'brandkit', ext: 'json', bytes: Buffer.from(stdout, 'utf8') });
+  const outPath = await writeAssetFile({ projectRoot, requestId: id, kind: 'brandkit', ext: 'json', bytes: Buffer.from(stdout, 'utf8') });
   return {
     schemaVersion: 1,
     status: MEDIA_RESULT_STATUS.OK,
@@ -319,8 +342,11 @@ function parseImageResult({ id, stdout, projectRoot, kind }) {
   const parsed = tryParseJson(stdout);
   const results = Array.isArray(parsed?.results) ? parsed.results : [];
   const firstUrl = results[0]?.url ?? null;
-  const outPath = writeAssetFile({ projectRoot, requestId: id, kind, ext: 'json', bytes: Buffer.from(JSON.stringify({ id, parsed }, null, 2), 'utf8') });
-  return {
+  // The sync writeFileSync below would re-introduce a static `node:fs`
+  // dependency; we keep this on the async path via writeAssetFile (which
+  // already lazy-imports fs). When called outside the renderer this returns
+  // a Promise; the surrounding `.generate()` already awaits its result.
+  return writeAssetFile({ projectRoot, requestId: id, kind, ext: 'json', bytes: Buffer.from(JSON.stringify({ id, parsed }, null, 2), 'utf8') }).then((outPath) => ({
     schemaVersion: 1,
     status: MEDIA_RESULT_STATUS.OK,
     kind,
@@ -332,7 +358,7 @@ function parseImageResult({ id, stdout, projectRoot, kind }) {
     url: firstUrl,
     job: parsed?.id ?? null,
     ts: Date.now(),
-  };
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +419,7 @@ export async function selectProviderAsync() {
     // Phase 2: the real provider still reports unavailability on generate
     // because we don't shell out to the CLI from the renderer. The flip
     // is wired so Phase 4 can drop in the actual @higgsfield/cli call.
-    return buildHiggsfieldProvider({ token: 'present' });
+    return buildHiggsfieldProvider({ token: 'probe-placeholder' });
   }
   return StubProvider;
 }
@@ -407,4 +433,4 @@ export function selectProvider() {
   return StubProvider;
 }
 
-export const _internals = { escapeXml, probeHiggsfieldAuth, AUTH_STATUS, selectProviderAsync, isBinaryAvailable, writeAssetFile, tryParseJson };
+export const _internals = { escapeXml, probeHiggsfieldAuth, AUTH_STATUS, selectProviderAsync, isBinaryAvailable, writeAssetFile, tryParseJson, parseImageResult };
