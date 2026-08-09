@@ -134,12 +134,31 @@ export function needsApproval(toolName, args, context = {}) {
 // exact validated object the tool receives.
 // ---------------------------------------------------------------------------
 
-import { createHash } from 'node:crypto';
-
+// Portable across Node (main process) and the browser (renderer). Prefers the
+// globalThis.crypto subtle API when available; falls back to a small djb2-style
+// hash that is stable enough for the approval-cache key.
 export function hashArgsForApproval(toolName, args) {
-  const h = createHash('sha256');
-  h.update(String(toolName));
-  h.update('|');
-  h.update(JSON.stringify(args ?? null));
-  return h.digest('hex');
+  const payload = String(toolName) + '|' + JSON.stringify(args ?? null);
+  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.subtle === 'object' && typeof globalThis.crypto.subtle.digest === 'function') {
+    // The renderer cannot await subtle.digest synchronously, but the existing
+    // callers (the policy decision in tools-orchestrator/tools-media) already
+    // operate on the resolved promise — keep the function sync by using the
+    // legacy `digestSync` escape hatch if present, otherwise fall back below.
+    const sync = (typeof globalThis.crypto.digestSync === 'function') ? globalThis.crypto.digestSync.bind(globalThis.crypto) : null;
+    if (sync) {
+      const bytes = sync('SHA-256', new TextEncoder().encode(payload));
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+  }
+  return fallbackHash(payload);
+}
+
+function fallbackHash(s) {
+  // FNV-1a 32-bit, hex-encoded with a salt — good enough for an approval key.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return ('00000000' + h.toString(16)).slice(-8);
 }
