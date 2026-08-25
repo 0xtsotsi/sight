@@ -1,3 +1,11 @@
+// src/a11y/rules.js
+//
+// Pure data + tiny helpers. CommonJS module.exports (rather than ES
+// `export`) so the Electron main process can require it through the
+// a11y/audit.js bridge. The renderer uses the same module via Vite's
+// ESM-to-ESM passthrough; both shapes coexist because Vite treats
+// module.exports as the default export.
+
 const RULES = {
   'image-alt': { severity: 'critical', fixTemplate: 'Add alt text to the image', selectorType: 'css', mdn: 'https://developer.mozilla.org/en-US/docs/Web/HTML/Element/img' },
   'button-name': { severity: 'critical', fixTemplate: 'Add an accessible name to the button', selectorType: 'css', mdn: 'https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Attributes/aria-label' },
@@ -21,11 +29,11 @@ const RULES = {
   'table-header': { severity: 'serious', fixTemplate: 'Add a header to the table', selectorType: 'css', mdn: 'https://developer.mozilla.org/en-US/docs/Web/HTML/Element/th' },
 };
 
-export const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
-export const RULE_METADATA = Object.freeze(RULES);
-export const getRuleMetadata = (id) => RULES[id] || { severity: 'minor', fixTemplate: 'Review this accessibility issue', selectorType: 'css', mdn: 'https://www.w3.org/WAI/standards-guidelines/wcag/' };
+const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
+const RULE_METADATA = Object.freeze(RULES);
+const getRuleMetadata = (id) => RULES[id] || { severity: 'minor', fixTemplate: 'Review this accessibility issue', selectorType: 'css', mdn: 'https://www.w3.org/WAI/standards-guidelines/wcag/' };
 
-export function normalizeViolation(violation, index = 0) {
+function normalizeViolation(violation, index = 0) {
   const meta = getRuleMetadata(violation?.id);
   const targets = Array.isArray(violation?.nodes) ? violation.nodes : [];
   return {
@@ -40,10 +48,18 @@ export function normalizeViolation(violation, index = 0) {
   };
 }
 
-export function normalizeResults(results = {}) {
+function normalizeResults(results = {}) {
   const violations = (results.violations || []).map(normalizeViolation);
   const passes = Array.isArray(results.passes) ? results.passes.length : 0;
   const incomplete = Array.isArray(results.incomplete) ? results.incomplete.length : 0;
   const score = Math.max(0, Math.min(100, Math.round((passes / Math.max(1, passes + violations.length + incomplete)) * 100)));
   return { violations, passes, incomplete, score, timestamp: results.timestamp || Date.now() };
 }
+
+module.exports = { SEVERITIES, RULE_METADATA, getRuleMetadata, normalizeViolation, normalizeResults };
+// Vite ESM interop: also expose named exports for ESM consumers.
+module.exports.SEVERITIES = SEVERITIES;
+module.exports.RULE_METADATA = RULE_METADATA;
+module.exports.getRuleMetadata = getRuleMetadata;
+module.exports.normalizeViolation = normalizeViolation;
+module.exports.normalizeResults = normalizeResults;

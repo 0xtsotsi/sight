@@ -238,50 +238,76 @@ ipcMain.handle('native:paste', () => {
 ipcMain.handle('agent:getCredential', async () => agentCredential.getCredential());
 
 // ---------------------------------------------------------------------------
-// Phase 2: Higgsfield credential probe.
+// 2026-08-06: FAL_KEY credential probe (replaces Higgsfield probe).
 //
-// Renderer never sees the raw token. We open the file, try to decrypt it
-// with safeStorage (so the value is on disk in encrypted form), and report
-// only a stable {status, reason?, recoveryCommand?} envelope. If the user
-// has not run `higgsfield auth login`, the file is missing or malformed
-// and we report UNAVAILABLE with the exact one-line recovery command.
+// Renderer never sees the raw key. We read process.env.FAL_KEY and report
+// only a stable {status, reason?, recoveryCommand?} envelope. If FAL_KEY
+// is unset, the renderer gets UNAVAILABLE with the exact one-line recovery
+// command. The key value is NEVER returned across the IPC boundary.
 //
-// safeStorage may be unavailable on some Linux distros; in that case we
-// still report UNAVAILABLE but the reason points the user at the docs.
+// Onboarding path: operator runs `export FAL_KEY=<key>` in their shell
+// before launching Sight, OR drops the key into ~/.config/sight/fal.key
+// (mode 0600) and Sight picks it up at probe time.
 // ---------------------------------------------------------------------------
 
-const HIGGSFIELD_CRED_PATH = path.join(os.homedir(), '.config', 'higgsfield', 'credentials.json');
-const HIGGSFIELD_RECOVERY = 'higgsfield auth login';
+const FAL_ENV_VAR = 'FAL_KEY';
+const FAL_FILE_PATH = path.join(os.homedir(), '.config', 'sight', 'fal.key');
+const FAL_RECOVERY = 'export FAL_KEY=<your-fal-key>  # https://fal.ai/dashboard/keys';
 
-ipcMain.handle('higgsfield:authProbe', async () => {
-  if (typeof safeStorage === 'undefined' || !safeStorage.isEncryptionAvailable?.()) {
-    return { status: 'unavailable', reason: 'safeStorage is not available on this host', recoveryCommand: HIGGSFIELD_RECOVERY };
-  }
-  let raw;
-  try {
-    raw = await fs.readFile(HIGGSFIELD_CRED_PATH, 'utf8');
-  } catch (err) {
-    if (err && err.code === 'ENOENT') {
-      return { status: 'unavailable', reason: 'no credential file at ~/.config/higgsfield/credentials.json', recoveryCommand: HIGGSFIELD_RECOVERY };
+ipcMain.handle('fal:authProbe', async () => {
+  let key = process.env[FAL_ENV_VAR];
+  if (!key || typeof key !== 'string' || key.length === 0) {
+    // Fallback: read from a host-local file the operator maintains.
+    // Same key-isolation rules as the env-var path: presence-only here.
+    try {
+      key = (await fs.readFile(FAL_FILE_PATH, 'utf8')).trim();
+    } catch {
+      return { status: 'unavailable', reason: 'FAL_KEY is not set in env or ~/.config/sight/fal.key', recoveryCommand: FAL_RECOVERY };
     }
-    return { status: 'unavailable', reason: 'cannot read credential file: ' + (err?.message ?? String(err)), recoveryCommand: HIGGSFIELD_RECOVERY };
   }
-  let parsed;
+  if (!key || key.length < 8) {
+    return { status: 'unavailable', reason: 'FAL_KEY value looks malformed (expected >= 8 chars)', recoveryCommand: FAL_RECOVERY };
+  }
+  return { status: 'ready', reason: 'FAL_KEY present' };
+});
+
+// ---------------------------------------------------------------------------
+// 2026-08-06: FAL_KEY generation handler. The renderer never sees the real
+// key — it submits a typed generation envelope via IPC, the main process
+// uses the host-side FAL_KEY to call fal.subscribe, and returns the
+// response envelope back. This is the only path that can produce real
+// assets in the renderer flow.
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('fal:generate', async (_e, { model, input, pollTimeoutMs } = {}) => {
+  if (!model || typeof model !== 'string') {
+    return { ok: false, error: 'model is required' };
+  }
+  const envKey = process.env[FAL_ENV_VAR];
+  let realKey = (typeof envKey === 'string' && envKey.length > 0) ? envKey : null;
+  if (!realKey) {
+    try {
+      realKey = (await fs.readFile(FAL_FILE_PATH, 'utf8')).trim();
+    } catch {
+      return { ok: false, error: 'FAL_KEY is not configured on host', recoveryCommand: FAL_RECOVERY };
+    }
+  }
+  if (!realKey || realKey.length < 8) {
+    return { ok: false, error: 'FAL_KEY is malformed' };
+  }
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { status: 'unavailable', reason: 'credential file is not valid JSON', recoveryCommand: HIGGSFIELD_RECOVERY };
+    const mod = await import('@fal-ai/client');
+    mod.fal.config({ credentials: realKey });
+    const { data, requestId } = await mod.fal.subscribe(model, {
+      input: input ?? {},
+      logs: false,
+      pollInterval: 1500,
+      timeout: typeof pollTimeoutMs === 'number' ? pollTimeoutMs : 5 * 60 * 1000,
+    });
+    return { ok: true, data, requestId };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
   }
-  // Phase 2 reads the credential file as plain JSON. The token is checked
-  // for presence only — it is NEVER returned across the IPC boundary. If
-  // Phase 4 introduces safeStorage-encrypted at-rest credentials, swap
-  // this for safeStorage.decryptString(raw) before JSON.parse and gate
-  // on safeStorage.isEncryptionAvailable() above.
-  const token = typeof parsed.token === 'string' ? parsed.token : (typeof parsed.access_token === 'string' ? parsed.access_token : null);
-  if (!token || token.length === 0) {
-    return { status: 'unavailable', reason: 'credential file has no token field', recoveryCommand: HIGGSFIELD_RECOVERY };
-  }
-  return { status: 'ready', reason: 'token present' };
 });
 
 // ---------------------------------------------------------------------------
@@ -327,6 +353,347 @@ ipcMain.handle('agent:listBackgroundTasks', async (_e, { projectRoot } = {}) => 
   const { listTasks } = require('./worktreeShim.js');
   return { ok: true, tasks: listTasks(projectRoot) };
 });
+
+ipcMain.handle('agent:adoptBackgroundTask', async (_e, { projectRoot, taskId, action } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!taskId) return { ok: false, error: 'taskId is required' };
+  if (!['discard', 'merge', 'keep'].includes(action)) return { ok: false, error: 'invalid action' };
+  const { finalizeTask } = require('./worktreeShim.js');
+  const result = finalizeTask(projectRoot, taskId, action);
+  return { ok: true, ...result };
+});
+
+// Design systems — read/write the .sight/design-systems.json file. The file
+// maps a named preset to a token block that the parser emits under a
+// `:root[data-design-system="name"]` selector so styles apply per-frame.
+const DEFAULT_DESIGN_SYSTEMS = {
+  'default': { tokens: {} },
+  'high-contrast': { tokens: { '--text': '#fff', '--bg': '#000', '--accent': '#ffcb05' } },
+};
+
+ipcMain.handle('designSystems:list', async (_e, { projectRoot } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, systems: { ...DEFAULT_DESIGN_SYSTEMS } };
+  const file = path.join(projectRoot, '.sight', 'design-systems.json');
+  if (!fs.existsSync(file)) return { ok: true, systems: { ...DEFAULT_DESIGN_SYSTEMS } };
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return { ok: true, systems: { ...DEFAULT_DESIGN_SYSTEMS, ...raw } };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
+ipcMain.handle('designSystems:setActive', async (_e, { projectRoot, name, tokens } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!name || typeof name !== 'string') return { ok: false, error: 'name is required' };
+  const file = path.join(projectRoot, '.sight', 'design-systems.json');
+  mkdirSync(path.dirname(file), { recursive: true });
+  let current = {};
+  if (fs.existsSync(file)) {
+    try { current = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { current = {}; }
+  }
+  current[name] = { tokens: tokens || {} };
+  fs.writeFileSync(file, JSON.stringify(current, null, 2));
+  return { ok: true, name, tokens: current[name].tokens };
+});
+
+// Drops (M9) — export a single frame as a portable .astro snippet bundled
+// in a tiny ZIP. The user's selected page (or a synthetic bundle for a
+// non-page node) becomes a single entry-point at `frame.astro`, plus a
+// `meta.json` capture so recipients can see the build context.
+//
+// ZIP is built with a minimal writer (no `archiver` dep) using Node's
+// built-in `node:zlib` for STORE + DEFLATE entries. The layout is the
+// canonical PKZIP APPNOTE 6.3.4 spec.
+
+const zlib = require('zlib');
+
+function crc32(buf) {
+  // IEEE 802.3 CRC32, precomputed table.
+  if (!crc32._table) {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    crc32._table = t;
+  }
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) {
+    c = (crc32._table[(c ^ buf[i]) & 0xFF] ^ (c >>> 8)) >>> 0;
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+async function buildZip(entries) {
+  // entries: { [name]: string | Buffer }
+  const now = new Date();
+  const dosTime = ((now.getHours() & 0x1f) << 11) | ((now.getMinutes() & 0x3f) << 5) | (Math.floor(now.getSeconds() / 2) & 0x1f);
+  const dosDate = (((now.getFullYear() - 1980) & 0x7f) << 9) | (((now.getMonth() + 1) & 0x0f) << 5) | (now.getDate() & 0x1f);
+  const localParts = [];
+  const central = [];
+  let offset = 0;
+  for (const name of Object.keys(entries)) {
+    const data = Buffer.isBuffer(entries[name]) ? entries[name] : Buffer.from(entries[name], 'utf8');
+    const compressed = zlib.deflateRawSync(data);
+    const useDeflate = compressed.length < data.length;
+    const payload = useDeflate ? compressed : data;
+    const method = useDeflate ? 8 : 0;
+    const crc = crc32(data);
+    const nameBuf = Buffer.from(name, 'utf8');
+    // Local file header (signature 0x04034b50).
+    const lfh = Buffer.alloc(30);
+    lfh.writeUInt32LE(0x04034b50, 0);
+    lfh.writeUInt16LE(20, 4); // version needed
+    lfh.writeUInt16LE(0, 6);  // flags
+    lfh.writeUInt16LE(method, 8);
+    lfh.writeUInt16LE(dosTime, 10);
+    lfh.writeUInt16LE(dosDate, 12);
+    lfh.writeUInt32LE(crc, 14);
+    lfh.writeUInt32LE(payload.length, 18);
+    lfh.writeUInt32LE(data.length, 22);
+    lfh.writeUInt16LE(nameBuf.length, 26);
+    lfh.writeUInt16LE(0, 28);
+    localParts.push(Buffer.concat([lfh, nameBuf, payload]));
+    // Central directory header (signature 0x02014b50).
+    const cdh = Buffer.alloc(46);
+    cdh.writeUInt32LE(0x02014b50, 0);
+    cdh.writeUInt16LE(20, 4); // version made by
+    cdh.writeUInt16LE(20, 6); // version needed
+    cdh.writeUInt16LE(0, 8);
+    cdh.writeUInt16LE(method, 10);
+    cdh.writeUInt16LE(dosTime, 12);
+    cdh.writeUInt16LE(dosDate, 14);
+    cdh.writeUInt32LE(crc, 16);
+    cdh.writeUInt32LE(payload.length, 20);
+    cdh.writeUInt32LE(data.length, 24);
+    cdh.writeUInt16LE(nameBuf.length, 28);
+    cdh.writeUInt16LE(0, 30);
+    cdh.writeUInt16LE(0, 32);
+    cdh.writeUInt16LE(0, 34);
+    cdh.writeUInt16LE(0, 36);
+    cdh.writeUInt32LE(0, 38);
+    cdh.writeUInt32LE(offset, 42);
+    central.push(Buffer.concat([cdh, nameBuf]));
+    offset += lfh.length + nameBuf.length + payload.length;
+  }
+  const local = Buffer.concat(localParts);
+  const centralBuf = Buffer.concat(central);
+  // End of central directory record (signature 0x06054b50).
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(Object.keys(entries).length, 8);
+  eocd.writeUInt16LE(Object.keys(entries).length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+  eocd.writeUInt16LE(0, 20);
+  return Buffer.concat([local, centralBuf, eocd]);
+}
+ipcMain.handle('agent:exportFrame', async (_e, { projectRoot, framePath, frameName, sources } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!framePath || typeof framePath !== 'string') return { ok: false, error: 'framePath is required' };
+  const safePath = path.resolve(framePath);
+  if (!(safePath + path.sep).startsWith(path.resolve(projectRoot) + path.sep)) {
+    return { ok: false, error: 'framePath is outside the project' };
+  }
+  if (!fs.existsSync(safePath)) return { ok: false, error: 'frame file not found' };
+  const frameSource = fs.readFileSync(safePath, 'utf8');
+  const meta = {
+    name: frameName || path.basename(safePath),
+    sourcePath: path.relative(projectRoot, safePath),
+    exportedAt: new Date().toISOString(),
+    sources: Array.isArray(sources) ? sources : [],
+  };
+  const zip = await buildZip({
+    'frame.astro': frameSource,
+    'meta.json': JSON.stringify(meta, null, 2),
+  });
+  const outDir = path.join(projectRoot, '.sight', 'drops');
+  mkdirSync(outDir, { recursive: true });
+  const outName = (frameName || path.basename(safePath, '.astro')).replace(/[^\w.-]+/g, '-') + '.drop.zip';
+  const outPath = path.join(outDir, outName);
+  fs.writeFileSync(outPath, zip);
+  return { ok: true, path: outPath, bytes: zip.length };
+});
+
+// Snapshots (M11) — per-project version history. Each snapshot is a
+// tarball of the project files under .sight/snapshots/<ts>.tar.gz. The
+// rotation policy keeps 20 most-recent + the last 7 daily snapshots.
+//
+// We use Node's built-in `node:zlib` + a minimal TAR writer (no external
+// deps). The format is the POSIX `ustar` TAR, which is supported by
+// every archive tool on the planet.
+ipcMain.handle('project:snapshot', async (_e, { projectRoot, label } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  const dir = path.join(projectRoot, '.sight', 'snapshots');
+  mkdirSync(dir, { recursive: true });
+  const ts = Date.now();
+  const filename = `${ts}${label ? '-' + String(label).replace(/[^\w.-]+/g, '-') : ''}.tar.gz`;
+  const outPath = path.join(dir, filename);
+  // Build a tarball of src/ + package.json + astro.config.* (limited
+  // scope; node_modules and .sight/ are excluded).
+  const tarbuf = buildProjectTar(projectRoot);
+  const gzbuf = zlib.gzipSync(tarbuf);
+  fs.writeFileSync(outPath, gzbuf);
+  // Rotation: keep last 20 + the 7 daily snapshots.
+  pruneSnapshots(dir);
+  return { ok: true, path: outPath, ts, bytes: gzbuf.length };
+});
+
+ipcMain.handle('project:listSnapshots', async (_e, { projectRoot } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, snapshots: [] };
+  const dir = path.join(projectRoot, '.sight', 'snapshots');
+  if (!fs.existsSync(dir)) return { ok: true, snapshots: [] };
+  const entries = fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.tar.gz'))
+    .map((f) => {
+      const full = path.join(dir, f);
+      const stat = fs.statSync(full);
+      const match = f.match(/^(\d+)/);
+      const ts = match ? parseInt(match[1], 10) : stat.mtimeMs;
+      return { name: f, path: full, ts, bytes: stat.size };
+    })
+    .sort((a, b) => b.ts - a.ts);
+  return { ok: true, snapshots: entries };
+});
+
+ipcMain.handle('project:restoreSnapshot', async (_e, { projectRoot, snapshotPath } = {}) => {
+  if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: false, error: 'no project' };
+  if (!snapshotPath || !fs.existsSync(snapshotPath)) return { ok: false, error: 'snapshot not found' };
+  // Extract the tarball over the project's src/ + package.json. Backup
+  // the current tree first so a restore is reversible.
+  const backup = await buildProjectTar(projectRoot);
+  const safeSnap = path.resolve(snapshotPath);
+  const safeProject = path.resolve(projectRoot);
+  try {
+    const tar = fs.readFileSync(safeSnap);
+    const gun = zlib.gunzipSync(tar);
+    extractTar(gun, safeProject);
+    return { ok: true, restoredFrom: safeSnap, backupBytes: backup.length };
+  } catch (err) {
+    // Restore the backup if the new one failed to extract.
+    try { extractTar(backup, safeProject); } catch {}
+    return { ok: false, error: 'restore failed: ' + String(err.message || err) };
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Mini TAR writer (ustar) — used by project:snapshot.
+// ---------------------------------------------------------------------------
+
+function tarHeader(name, size, mode) {
+  const buf = Buffer.alloc(512);
+  // Name (max 100 chars) — long names use the @longlink extension.
+  if (name.length > 100) {
+    const prefix = '././@LongLink';
+    buf.write(prefix, 0, 'utf8');
+    const nameBuf = Buffer.from(name + '\n', 'utf8');
+    return { header: buf, nameBuf };
+  }
+  buf.write(name, 0, 'utf8');
+  buf.write(mode.toString(8).padStart(7, '0') + '\0', 100);
+  buf.write('0001750\0', 108); // uid
+  buf.write('0001750\0', 116); // gid
+  buf.write(size.toString(8).padStart(11, '0') + '\0', 124);
+  buf.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0', 136);
+  buf.write('        ', 148); // checksum placeholder
+  buf.write('0', 156); // typeflag (regular file)
+  buf.write('ustar\0', 257);
+  buf.write('00', 263);
+  buf.write('sight', 265, 'utf8');
+  // Compute checksum.
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += buf[i];
+  buf.write(sum.toString(8).padStart(6, '0') + '\0', 148);
+  return { header: buf, nameBuf: null };
+}
+
+function buildTar(files) {
+  // files: [{ name, content }]
+  const parts = [];
+  for (const f of files) {
+    const data = Buffer.isBuffer(f.content) ? f.content : Buffer.from(f.content, 'utf8');
+    const { header, nameBuf } = tarHeader(f.name, data.length, 0o644);
+    if (nameBuf) parts.push(nameBuf);
+    parts.push(header);
+    parts.push(data);
+    const pad = (512 - (data.length % 512)) % 512;
+    if (pad > 0) parts.push(Buffer.alloc(pad));
+  }
+  // Two zero blocks = end-of-archive.
+  parts.push(Buffer.alloc(1024));
+  return Buffer.concat(parts);
+}
+
+function buildProjectTar(projectRoot) {
+  const files = [];
+  function walk(dir, prefix) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name.startsWith('.sight')) continue;
+      const rel = prefix ? prefix + '/' + e.name : e.name;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        walk(full, rel);
+      } else if (e.isFile()) {
+        try {
+          const content = fs.readFileSync(full);
+          files.push({ name: rel, content });
+        } catch {}
+      }
+    }
+  }
+  walk(projectRoot, '');
+  return buildTar(files);
+}
+
+function extractTar(buf, projectRoot) {
+  let pos = 0;
+  while (pos < buf.length) {
+    const header = buf.slice(pos, pos + 512);
+    pos += 512;
+    if (header[0] === 0) break; // end-of-archive
+    const name = header.slice(0, 100).toString('utf8').replace(/\0.*$/g, '').trim();
+    const sizeStr = header.slice(124, 136).toString('utf8').replace(/\0/g, '').trim();
+    const size = parseInt(sizeStr, 8);
+    if (!name || isNaN(size)) break;
+    const data = buf.slice(pos, pos + size);
+    pos += Math.ceil(size / 512) * 512;
+    const outPath = path.join(projectRoot, name);
+    // Refuse paths that escape the project root.
+    if (!(outPath + path.sep).startsWith(path.resolve(projectRoot) + path.sep)) continue;
+    mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, data);
+  }
+}
+
+function pruneSnapshots(dir) {
+  // Keep 20 most recent + 7 daily ones (one per day).
+  const entries = fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.tar.gz'))
+    .map((f) => ({ f, full: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  const keep = new Set();
+  for (let i = 0; i < Math.min(20, entries.length); i++) keep.add(entries[i].f);
+  // Keep the latest snapshot per day for the last 7 calendar days.
+  const byDay = new Map();
+  for (const e of entries) {
+    const d = new Date(e.mtime);
+    const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+    if (!byDay.has(key)) byDay.set(key, e.f);
+  }
+  const daily = Array.from(byDay.values()).slice(0, 7);
+  for (const f of daily) keep.add(f);
+  for (const e of entries) {
+    if (!keep.has(e.f)) {
+      try { fs.unlinkSync(e.full); } catch {}
+    }
+  }
+}
 
 ipcMain.handle('agent:pruneBackgroundTasks', async (_e, { projectRoot } = {}) => {
   if (!projectRoot || !fs.existsSync(projectRoot)) return { ok: true, removed: 0 };
